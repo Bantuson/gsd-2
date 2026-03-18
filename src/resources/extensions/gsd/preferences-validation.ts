@@ -559,8 +559,7 @@ export function validatePreferences(preferences: GSDPreferences): {
       }
     }
     if (g.commit_docs !== undefined) {
-      if (typeof g.commit_docs === "boolean") git.commit_docs = g.commit_docs;
-      else errors.push("git.commit_docs must be a boolean");
+      warnings.push("git.commit_docs is deprecated — .gsd/ is managed externally and always gitignored. Remove this setting.");
     }
     if (g.manage_gitignore !== undefined) {
       if (typeof g.manage_gitignore === "boolean") git.manage_gitignore = g.manage_gitignore;

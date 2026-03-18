@@ -39,13 +39,12 @@ test("git.merge_to_main produces deprecation warning", () => {
   }
 });
 
-test("git.commit_docs accepts boolean, rejects string", () => {
-  const { errors: e1, preferences: p1 } = validatePreferences({ git: { commit_docs: false } });
-  assert.equal(e1.length, 0);
-  assert.equal(p1.git?.commit_docs, false);
+test("git.commit_docs produces deprecation warning", () => {
+  const { warnings: w1 } = validatePreferences({ git: { commit_docs: false } });
+  assert.ok(w1.some(w => w.includes("deprecated")));
 
-  const { errors: e2 } = validatePreferences({ git: { commit_docs: "no" as any } });
-  assert.ok(e2.length > 0);
+  const { warnings: w2 } = validatePreferences({ git: { commit_docs: true } });
+  assert.ok(w2.some(w => w.includes("deprecated")));
 });
 
 test("getIsolationMode defaults to worktree when no prefs file", { skip: "requires no global ~/.gsd/preferences.md" }, () => {

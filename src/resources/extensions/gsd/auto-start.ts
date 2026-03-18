@@ -37,7 +37,7 @@ import {
 } from "./session-lock.js";
 import { selfHealRuntimeRecords } from "./auto-recovery.js";
 import { ensureGitignore, untrackRuntimeFiles } from "./gitignore.js";
-import { nativeIsRepo, nativeInit, nativeAddAll, nativeCommit } from "./native-git-bridge.js";
+import { nativeIsRepo, nativeInit } from "./native-git-bridge.js";
 import { GitServiceImpl } from "./git-service.js";
 import {
   captureIntegrationBranch,
@@ -109,9 +109,8 @@ export async function bootstrapAutoSession(
 
   // Ensure .gitignore has baseline patterns
   const gitPrefs = loadEffectiveGSDPreferences()?.preferences?.git;
-  const commitDocs = gitPrefs?.commit_docs;
   const manageGitignore = gitPrefs?.manage_gitignore;
-  ensureGitignore(base, { commitDocs, manageGitignore });
+  ensureGitignore(base, { manageGitignore });
   if (manageGitignore !== false) untrackRuntimeFiles(base);
 
   // Migrate legacy in-project .gsd/ to external state directory
@@ -127,12 +126,6 @@ export async function bootstrapAutoSession(
   const gsdDir = gsdRoot(base);
   if (!existsSync(gsdDir)) {
     mkdirSync(join(gsdDir, "milestones"), { recursive: true });
-    if (commitDocs !== false) {
-      try {
-        nativeAddAll(base);
-        nativeCommit(base, "chore: init gsd");
-      } catch { /* nothing to commit */ }
-    }
   }
 
   // Initialize GitServiceImpl
@@ -323,7 +316,7 @@ export async function bootstrapAutoSession(
   // Capture integration branch
   if (s.currentMilestoneId) {
     if (getIsolationMode() !== "none") {
-      captureIntegrationBranch(base, s.currentMilestoneId, { commitDocs });
+      captureIntegrationBranch(base, s.currentMilestoneId);
     }
     setActiveMilestoneId(base, s.currentMilestoneId);
   }

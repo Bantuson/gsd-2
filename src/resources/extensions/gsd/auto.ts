@@ -1132,7 +1132,7 @@ async function dispatchNextUnit(
       midTitle = state.activeMilestone?.title;
 
       if (mid) {
-        captureIntegrationBranch(s.basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+        captureIntegrationBranch(s.basePath, mid);
         try {
           const wtPath = createAutoWorktree(s.basePath, mid);
           s.basePath = wtPath;
@@ -1147,7 +1147,7 @@ async function dispatchNextUnit(
       }
     } else {
       if (getIsolationMode() !== "none") {
-        captureIntegrationBranch(s.originalBasePath || s.basePath, mid, { commitDocs: loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs });
+        captureIntegrationBranch(s.originalBasePath || s.basePath, mid);
       }
     }
 

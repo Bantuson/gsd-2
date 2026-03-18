@@ -47,13 +47,9 @@ export {
 
 // ─── Commit Instruction Helpers ──────────────────────────────────────────────
 
-/** Build conditional commit instruction for planning prompts based on commit_docs preference. */
-function buildDocsCommitInstruction(message: string): string {
-  const prefs = loadEffectiveGSDPreferences();
-  const commitDocsEnabled = prefs?.preferences?.git?.commit_docs !== false;
-  return commitDocsEnabled
-    ? `Commit: \`${message}\`. Stage only the .gsd/milestones/, .gsd/PROJECT.md, .gsd/REQUIREMENTS.md, .gsd/DECISIONS.md, and .gitignore files you changed — do not stage .gsd/STATE.md or other runtime files.`
-    : "Do not commit — planning docs are not tracked in git for this project.";
+/** Build commit instruction for planning prompts. .gsd/ is managed externally and always gitignored. */
+function buildDocsCommitInstruction(_message: string): string {
+  return "Do not commit planning artifacts — .gsd/ is managed externally.";
 }
 
 // ─── Auto-start after discuss ─────────────────────────────────────────────────
@@ -269,8 +265,7 @@ function bootstrapGsdProject(basePath: string): void {
   mkdirSync(join(root, "milestones"), { recursive: true });
   mkdirSync(join(root, "runtime"), { recursive: true });
 
-  const commitDocs = loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs;
-  ensureGitignore(basePath, { commitDocs });
+  ensureGitignore(basePath);
   ensurePreferences(basePath);
   untrackRuntimeFiles(basePath);
 }
@@ -786,8 +781,7 @@ export async function showSmartEntry(
   }
 
   // ── Ensure .gitignore has baseline patterns ──────────────────────────
-  const commitDocs = loadEffectiveGSDPreferences()?.preferences?.git?.commit_docs;
-  ensureGitignore(basePath, { commitDocs });
+  ensureGitignore(basePath);
   untrackRuntimeFiles(basePath);
 
   // ── Self-heal stale runtime records from crashed auto-mode sessions ──

@@ -1086,12 +1086,12 @@ async function main(): Promise<void> {
     rmSync(repo, { recursive: true, force: true });
   }
 
-  // ─── commit_docs: false — smartStage excludes .gsd/ ──────────────────
+  // ─── smartStage always excludes .gsd/ ──────────────────────────────
 
-  console.log("\n=== commit_docs: false — smartStage excludes .gsd/ ===");
+  console.log("\n=== smartStage always excludes .gsd/ ===");
 
   {
-    const repo = mkdtempSync(join(tmpdir(), "gsd-commit-docs-"));
+    const repo = mkdtempSync(join(tmpdir(), "gsd-smart-stage-excludes-"));
     run("git init -b main", repo);
     run("git config user.email test@test.com", repo);
     run("git config user.name Test", repo);
@@ -1104,65 +1104,37 @@ async function main(): Promise<void> {
     writeFileSync(join(repo, ".gsd", "preferences.md"), "---\nversion: 1\n---");
     writeFileSync(join(repo, "src.ts"), "const x = 1;");
 
-    // With commit_docs: false, smartStage should exclude .gsd/
-    const svc = new GitServiceImpl(repo, { commit_docs: false });
+    // smartStage always excludes .gsd/ — state is managed externally
+    const svc = new GitServiceImpl(repo);
     const msg = svc.commit({ message: "test commit" });
-    assertTrue(msg !== null, "commit_docs=false: commit succeeds with non-.gsd files");
+    assertTrue(msg !== null, "smartStage: commit succeeds with non-.gsd files");
 
     // .gsd/ files should NOT be in the commit
     const committed = run("git show --name-only HEAD", repo);
-    assertTrue(!committed.includes(".gsd/"), "commit_docs=false: .gsd/ files not in commit");
-    assertTrue(committed.includes("src.ts"), "commit_docs=false: source files ARE in commit");
+    assertTrue(!committed.includes(".gsd/"), "smartStage: .gsd/ files not in commit");
+    assertTrue(committed.includes("src.ts"), "smartStage: source files ARE in commit");
 
     rmSync(repo, { recursive: true, force: true });
   }
 
-  // ─── commit_docs: true (default) — smartStage includes .gsd/ ────────
+  // ─── writeIntegrationBranch: no commit (metadata in external storage) ──
 
-  console.log("\n=== commit_docs: true — smartStage includes .gsd/ ===");
-
-  {
-    const repo = mkdtempSync(join(tmpdir(), "gsd-commit-docs-default-"));
-    run("git init -b main", repo);
-    run("git config user.email test@test.com", repo);
-    run("git config user.name Test", repo);
-    writeFileSync(join(repo, "README.md"), "init");
-    run("git add -A && git commit -m init", repo);
-
-    mkdirSync(join(repo, ".gsd", "milestones", "M001"), { recursive: true });
-    writeFileSync(join(repo, ".gsd", "milestones", "M001", "ROADMAP.md"), "# Roadmap");
-    writeFileSync(join(repo, "src.ts"), "const x = 1;");
-
-    // Default behavior (commit_docs not set) — .gsd/ files ARE committed
-    const svc = new GitServiceImpl(repo);
-    const msg = svc.commit({ message: "test commit" });
-    assertTrue(msg !== null, "commit_docs=default: commit succeeds");
-
-    const committed = run("git show --name-only HEAD", repo);
-    assertTrue(committed.includes(".gsd/"), "commit_docs=default: .gsd/ files ARE in commit");
-    assertTrue(committed.includes("src.ts"), "commit_docs=default: source files in commit");
-
-    rmSync(repo, { recursive: true, force: true });
-  }
-
-  // ─── writeIntegrationBranch: commitDocs false skips commit ──────────
-
-  console.log("\n=== writeIntegrationBranch: commitDocs false skips commit ===");
+  console.log("\n=== writeIntegrationBranch: no commit ===");
 
   {
     const repo = initBranchTestRepo();
     const commitsBefore = run("git rev-list --count HEAD", repo);
 
-    writeIntegrationBranch(repo, "M001", "f-123-new-thing", { commitDocs: false });
+    writeIntegrationBranch(repo, "M001", "f-123-new-thing");
 
     // File should still be written to disk
     assertEq(readIntegrationBranch(repo, "M001"), "f-123-new-thing",
-      "commitDocs=false: metadata file exists on disk");
+      "writeIntegrationBranch: metadata file exists on disk");
 
-    // But no new commit should have been created
+    // No commit — .gsd/ is managed externally
     const commitsAfter = run("git rev-list --count HEAD", repo);
     assertEq(commitsBefore, commitsAfter,
-      "commitDocs=false: no git commit created for integration branch");
+      "writeIntegrationBranch: no git commit created for integration branch");
 
     rmSync(repo, { recursive: true, force: true });
   }
