@@ -23,13 +23,6 @@ import { loadEffectiveGSDPreferences } from "./preferences.js";
 import { loadQueueOrder, sortByQueueOrder, saveQueueOrder } from "./queue-order.js";
 import { findMilestoneIds, nextMilestoneId } from "./milestone-ids.js";
 
-// ─── Commit Instruction Helper (local copy — avoids circular dep) ───────────
-
-/** Build commit instruction for queue prompts. .gsd/ is managed externally and always gitignored. */
-function buildDocsCommitInstruction(_message: string): string {
-  return "Do not commit planning artifacts — .gsd/ is managed externally.";
-}
-
 // ─── Queue Entry Point ──────────────────────────────────────────────────────
 
 /**
@@ -207,7 +200,7 @@ export async function showQueueAdd(
     preamble,
     existingMilestonesContext: existingContext,
     inlinedTemplates: queueInlinedTemplates,
-    commitInstruction: buildDocsCommitInstruction("docs: queue <milestone list>"),
+    commitInstruction: "Do not commit planning artifacts — .gsd/ is managed externally.",
   });
 
   pi.sendMessage(
