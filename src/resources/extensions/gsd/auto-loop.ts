@@ -353,6 +353,7 @@ export interface LoopDeps {
   getManifestStatus: (
     basePath: string,
     mid: string | undefined,
+    projectRoot?: string,
   ) => Promise<{ pending: unknown[] } | null>;
   collectSecretsFromManifest: (
     basePath: string,
@@ -992,7 +993,7 @@ export async function autoLoop(
 
       // Secrets re-check gate
       try {
-        const manifestStatus = await deps.getManifestStatus(s.basePath, mid);
+        const manifestStatus = await deps.getManifestStatus(s.basePath, mid, s.originalBasePath);
         if (manifestStatus && manifestStatus.pending.length > 0) {
           const result = await deps.collectSecretsFromManifest(
             s.basePath,
