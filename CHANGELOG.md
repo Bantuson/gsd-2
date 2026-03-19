@@ -6,6 +6,42 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.35.0] - 2026-03-19
+
+### Added
+- **gsd**: add /gsd changelog command with LLM-summarized release notes (#1465)
+
+### Fixed
+- restore lsp single-server selector export
+- **mcp**: preserve args for mcp_call tool invocations (#1354)
+- accumulate session cost independently of message array (#1423)
+- resolve CI failures — scope provider check, fix Windows path, correct severity
+- close 5 doctor coverage gaps — providers, lock dir, integration branch, orphaned worktrees
+- add PID self-check to guided-flow crash lock detection (#1398)
+- **prefs**: close merge, validation, serialization, and docs gaps
+
+### Changed
+- deduplicate error emission and message patterns in agent-core (#1444)
+- simplify settings manager with generic setter helpers (#1461)
+- consolidate theme files and remove manual schema (#1478)
+- extract overlay layout and compositing from TUI into separate module (#1482)
+- extract slash command handlers from interactive-mode (#1485)
+- remove dead code (unused exports) (#1486)
+- extract retry handler and compaction orchestrator from agent-session
+- deduplicate rendering patterns in markdown and keys
+- consolidate shared code between OpenAI providers
+- deduplicate RPC mode shared patterns
+- extract shared tree rendering utilities
+- consolidate OAuth callback server and helper utilities
+- extract shared file lock utilities
+- consolidate resource loader with generic update/dedupe methods
+- consolidate model switching logic in agent-session
+- extract shared helpers in compaction module
+- deduplicate toPosixPath, ZERO_USAGE, and shortenPath utilities
+- consolidate 9 emit methods in extension runner into shared invokeHandlers
+- consolidate extension type guards and inline handler type aliases
+- consolidate duplicate patterns in LSP module
+
 ## [2.34.0] - 2026-03-19
 
 ### Added
@@ -1334,7 +1370,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.34.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.35.0...HEAD
+[2.35.0]: https://github.com/gsd-build/gsd-2/compare/v2.34.0...v2.35.0
 [2.34.0]: https://github.com/gsd-build/gsd-2/compare/v2.33.1...v2.34.0
 [2.33.1]: https://github.com/gsd-build/gsd-2/compare/v2.33.0...v2.33.1
 [2.33.0]: https://github.com/gsd-build/gsd-2/compare/v2.32.0...v2.33.0
