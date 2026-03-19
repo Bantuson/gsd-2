@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 
 import type { DoctorIssue, DoctorIssueCode } from "./doctor-types.js";
 import { loadFile, parseRoadmap } from "./files.js";
@@ -325,7 +325,7 @@ export async function checkRuntimeHealth(
   // can remain on disk without any live process holding it. The next session
   // fails to acquire the lock until the directory is removed (#1245).
   try {
-    const lockDir = join(dirname(root), `${root.split("/").pop() ?? ".gsd"}.lock`);
+    const lockDir = join(dirname(root), `${basename(root)}.lock`);
     if (existsSync(lockDir)) {
       const statRes = statSync(lockDir);
       if (statRes.isDirectory()) {

@@ -291,6 +291,10 @@ node_modules/
     }
 
     // ─── Test: Stranded lock directory detection & fix ────────────────
+    // Skip on Windows: proper-lockfile uses advisory file locking on Windows,
+    // not the directory-based mechanism. The .gsd.lock/ directory pattern is
+    // a POSIX-specific lockfile implementation detail.
+    if (process.platform !== "win32") {
     console.log("\n=== stranded_lock_directory ===");
     {
       const dir = createMinimalProject();
@@ -337,6 +341,9 @@ node_modules/
       const detect = await runGSDDoctor(dir);
       const strandedIssues = detect.issues.filter(i => i.code === "stranded_lock_directory");
       assertEq(strandedIssues.length, 0, "live lock holder: stranded_lock_directory NOT detected");
+    }
+    } else {
+      console.log("\n=== stranded_lock_directory (skipped on Windows) ===");
     }
 
   } finally {

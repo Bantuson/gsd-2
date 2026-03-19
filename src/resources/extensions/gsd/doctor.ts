@@ -397,35 +397,6 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
   // Environment health checks (#1221: missing tools, port conflicts, stale deps, disk space)
   await checkEnvironmentHealth(basePath, issues, { includeRemote: !options?.scope });
 
-  // Provider / auth health checks — detect missing or backed-off API keys before dispatching
-  try {
-    const providerResults = runProviderChecks();
-    for (const result of providerResults) {
-      if (!result.required) continue;
-      if (result.status === "error") {
-        issues.push({
-          severity: "error",
-          code: "provider_key_missing",
-          scope: "project",
-          unitId: "project",
-          message: result.message + (result.detail ? ` — ${result.detail}` : ""),
-          fixable: false,
-        });
-      } else if (result.status === "warning") {
-        issues.push({
-          severity: "warning",
-          code: "provider_key_backedoff",
-          scope: "project",
-          unitId: "project",
-          message: result.message + (result.detail ? ` — ${result.detail}` : ""),
-          fixable: false,
-        });
-      }
-    }
-  } catch {
-    // Non-fatal — provider check failure should not block other checks
-  }
-
   const milestonesPath = milestonesDir(basePath);
   if (!existsSync(milestonesPath)) {
     return { ok: issues.every(issue => issue.severity !== "error"), basePath, issues, fixesApplied };
@@ -436,6 +407,40 @@ export async function runGSDDoctor(basePath: string, options?: { fix?: boolean; 
   issues.push(...auditRequirements(requirementsContent));
 
   const state = await deriveState(basePath);
+
+  // Provider / auth health checks — only relevant when there is active work to dispatch.
+  // Skipped for idle projects (no active milestone) to avoid noise in environments
+  // where CI/test runners have no API key configured.
+  if (state.activeMilestone) {
+    try {
+      const providerResults = runProviderChecks();
+      for (const result of providerResults) {
+        if (!result.required) continue;
+        if (result.status === "error") {
+          issues.push({
+            severity: "warning",
+            code: "provider_key_missing",
+            scope: "project",
+            unitId: "project",
+            message: result.message + (result.detail ? ` — ${result.detail}` : ""),
+            fixable: false,
+          });
+        } else if (result.status === "warning") {
+          issues.push({
+            severity: "warning",
+            code: "provider_key_backedoff",
+            scope: "project",
+            unitId: "project",
+            message: result.message + (result.detail ? ` — ${result.detail}` : ""),
+            fixable: false,
+          });
+        }
+      }
+    } catch {
+      // Non-fatal — provider check failure should not block other checks
+    }
+  }
+
   for (const milestone of state.registry) {
     const milestoneId = milestone.id;
     const milestonePath = resolveMilestonePath(basePath, milestoneId);
