@@ -20,6 +20,8 @@ import {
   resolveSkillDiscoveryMode,
   getIsolationMode,
 } from "./preferences.js";
+import { ensureGsdSymlink } from "./repo-identity.js";
+import { migrateToExternalState, recoverFailedMigration } from "./migrate-external.js";
 import { collectSecretsFromManifest } from "../get-secrets-from-user.js";
 import { gsdRoot, resolveMilestoneFile, milestonesDir } from "./paths.js";
 import { invalidateAllCaches } from "./cache.js";
@@ -92,6 +94,13 @@ export interface BootstrapDeps {
  * Returns false if the bootstrap aborted (e.g., guided flow returned,
  * concurrent session detected). Returns true when ready to dispatch.
  */
+
+/** Guard: tracks consecutive bootstrap attempts that found phase === "complete".
+ *  Prevents the recursive dialog loop described in #1348 where
+ *  bootstrapAutoSession → showSmartEntry → checkAutoStartAfterDiscuss → startAuto
+ *  cycles indefinitely when the discuss workflow doesn't produce a milestone. */
+let _consecutiveCompleteBootstraps = 0;
+const MAX_CONSECUTIVE_COMPLETE_BOOTSTRAPS = 2;
 export async function bootstrapAutoSession(
   s: AutoSession,
   ctx: ExtensionCommandContext,
@@ -128,7 +137,20 @@ export async function bootstrapAutoSession(
       nativeInit(base, mainBranch);
     }
 
-    // Ensure .gitignore has baseline patterns
+    // Migrate legacy in-project .gsd/ to external state directory.
+    // Migration MUST run before ensureGitignore to avoid adding ".gsd" to
+    // .gitignore when .gsd/ is git-tracked (data-loss bug #1364).
+    recoverFailedMigration(base);
+    const migration = migrateToExternalState(base);
+    if (migration.error) {
+      ctx.ui.notify(`External state migration warning: ${migration.error}`, "warning");
+    }
+    // Ensure symlink exists (handles fresh projects and post-migration)
+    ensureGsdSymlink(base);
+
+    // Ensure .gitignore has baseline patterns.
+    // ensureGitignore checks for git-tracked .gsd/ files and skips the
+    // ".gsd" pattern if the project intentionally tracks .gsd/ in git.
     const gitPrefs = loadEffectiveGSDPreferences()?.preferences?.git;
     const commitDocs = gitPrefs?.commit_docs;
     const manageGitignore = gitPrefs?.manage_gitignore;
@@ -286,6 +308,20 @@ export async function bootstrapAutoSession(
     if (!hasSurvivorBranch) {
       // No active work — start a new milestone via discuss flow
       if (!state.activeMilestone || state.phase === "complete") {
+        // Guard against recursive dialog loop (#1348):
+        // If we've entered this branch multiple times in quick succession,
+        // the discuss workflow isn't producing a milestone. Break the cycle.
+        _consecutiveCompleteBootstraps++;
+        if (_consecutiveCompleteBootstraps > MAX_CONSECUTIVE_COMPLETE_BOOTSTRAPS) {
+          _consecutiveCompleteBootstraps = 0;
+          ctx.ui.notify(
+            "All milestones are complete and the discussion didn't produce a new one. " +
+            "Run /gsd to start a new milestone manually.",
+            "warning",
+          );
+          return releaseLockAndReturn();
+        }
+
         const { showSmartEntry } = await import("./guided-flow.js");
         await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
 
@@ -296,6 +332,7 @@ export async function bootstrapAutoSession(
           postState.phase !== "complete" &&
           postState.phase !== "pre-planning"
         ) {
+          _consecutiveCompleteBootstraps = 0; // Successfully advanced past "complete"
           state = postState;
         } else if (
           postState.activeMilestone &&
@@ -351,6 +388,9 @@ export async function bootstrapAutoSession(
       await showSmartEntry(ctx, pi, base, { step: requestedStepMode });
       return releaseLockAndReturn();
     }
+
+    // Successfully resolved an active milestone — reset the re-entry guard
+    _consecutiveCompleteBootstraps = 0;
 
     // ── Initialize session state ──
     s.active = true;

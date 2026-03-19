@@ -8,6 +8,8 @@
  */
 
 import type { ExtensionContext } from "@gsd/pi-coding-agent";
+import { parseUnitId } from "./unit-id.js";
+import { atomicWriteSync } from "./atomic-write.js";
 import { clearUnitRuntimeRecord } from "./unit-runtime.js";
 import { clearParseCache, parseRoadmap, parsePlan } from "./files.js";
 import { isValidationTerminal } from "./state.js";
@@ -35,6 +37,7 @@ import {
   clearPathCache,
   resolveGsdRootFile,
 } from "./paths.js";
+import { markSliceDoneInRoadmap } from "./roadmap-mutations.js";
 import {
   existsSync,
   mkdirSync,
@@ -498,6 +501,42 @@ export async function selfHealRuntimeRecords(
     const now = Date.now();
     for (const record of records) {
       const { unitType, unitId } = record;
+
+      // Case 0: complete-slice with SUMMARY + UAT but unchecked roadmap (#1350).
+      // If a complete-slice was interrupted after writing artifacts but before
+      // flipping the roadmap checkbox, the verification fails and the dispatch
+      // loop relaunches the same unit forever. Auto-fix the checkbox.
+      if (unitType === "complete-slice") {
+        const { milestone: mid, slice: sid } = parseUnitId(unitId);
+        if (mid && sid) {
+          const dir = resolveSlicePath(base, mid, sid);
+          if (dir) {
+            const summaryPath = join(dir, buildSliceFileName(sid, "SUMMARY"));
+            const uatPath = join(dir, buildSliceFileName(sid, "UAT"));
+            if (existsSync(summaryPath) && existsSync(uatPath)) {
+              const roadmapFile = resolveMilestoneFile(base, mid, "ROADMAP");
+              if (roadmapFile && existsSync(roadmapFile)) {
+                try {
+                  const roadmapContent = readFileSync(roadmapFile, "utf-8");
+                  const roadmap = parseRoadmap(roadmapContent);
+                  const slice = (roadmap.slices ?? []).find(s => s.id === sid);
+                  if (slice && !slice.done) {
+                    // Auto-fix: flip the checkbox using shared utility
+                    if (markSliceDoneInRoadmap(base, mid, sid)) {
+                      ctx.ui.notify(
+                        `Self-heal: marked ${sid} done in roadmap (SUMMARY + UAT exist but checkbox was stale).`,
+                        "info",
+                      );
+                    }
+                  }
+                } catch {
+                  // Roadmap parse failure — don't block self-heal
+                }
+              }
+            }
+          }
+        }
+      }
 
       // Clear stale dispatched records (dispatched > 1h ago, process crashed)
       const age = now - (record.startedAt ?? 0);

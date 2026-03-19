@@ -57,9 +57,19 @@ let _lockCompromised: boolean = false;
 /** Whether we've already registered a process.on('exit') handler. */
 let _exitHandlerRegistered: boolean = false;
 
+/** Snapshotted lock file path — captured at acquireSessionLock time to avoid
+ *  gsdRoot() resolving differently in worktree vs project root contexts (#1363). */
+let _snapshotLockPath: string | null = null;
+
+/** Timestamp when the session lock was acquired — used to detect false-positive
+ *  onCompromised events from event loop stalls within the stale window (#1362). */
+let _lockAcquiredAt: number = 0;
+
 const LOCK_FILE = "auto.lock";
 
 function lockPath(basePath: string): string {
+  // If we have a snapshotted path from acquisition, use it for consistency
+  if (_snapshotLockPath) return _snapshotLockPath;
   return join(gsdRoot(basePath), LOCK_FILE);
 }
 
@@ -198,8 +208,19 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
       onCompromised: () => {
         // proper-lockfile detected mtime drift (system sleep, event loop stall, etc.).
         // Default handler throws inside setTimeout — an uncaught exception that crashes
-        // or corrupts process state. Instead, set a flag so validateSessionLock() can
-        // detect the compromise gracefully on the next dispatch cycle.
+        // or corrupts process state.
+        //
+        // False-positive suppression (#1362): If we're still within the stale window
+        // (30 min since acquisition), the mtime mismatch is from an event loop stall
+        // during a long LLM call — not a real takeover. Log and continue.
+        const elapsed = Date.now() - _lockAcquiredAt;
+        if (elapsed < 1_800_000) {
+          process.stderr.write(
+            `[gsd] Lock heartbeat mismatch after ${Math.round(elapsed / 1000)}s — event loop stall, continuing.\n`,
+          );
+          return; // Suppress false positive
+        }
+        // Past the stale window — this is a real compromise
         _lockCompromised = true;
         _releaseFunction = null;
       },
@@ -209,6 +230,8 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
     _lockedPath = basePath;
     _lockPid = process.pid;
     _lockCompromised = false;
+    _lockAcquiredAt = Date.now();
+    _snapshotLockPath = lp; // Snapshot the resolved path for consistent access (#1363)
 
     // Safety net: clean up lock dir on process exit if _releaseFunction
     // wasn't called (e.g., normal exit after clean completion) (#1245).
@@ -245,6 +268,8 @@ export function acquireSessionLock(basePath: string): SessionLockResult {
         _lockedPath = basePath;
         _lockPid = process.pid;
         _lockCompromised = false;
+        _lockAcquiredAt = Date.now();
+        _snapshotLockPath = lp; // Snapshot for retry path too (#1363)
 
         // Safety net — uses centralized handler to avoid double-registration
         ensureExitHandler(gsdDir);
@@ -394,6 +419,8 @@ export function releaseSessionLock(basePath: string): void {
   _lockedPath = null;
   _lockPid = 0;
   _lockCompromised = false;
+  _lockAcquiredAt = 0;
+  _snapshotLockPath = null;
 }
 
 /**
