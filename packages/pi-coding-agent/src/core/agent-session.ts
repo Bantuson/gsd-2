@@ -246,6 +246,12 @@ export class AgentSession {
 	private _retryPromise: Promise<void> | undefined = undefined;
 	private _retryResolve: (() => void) | undefined = undefined;
 
+	// Cumulative session stats — survives compaction (#1423)
+	private _cumulativeCost = 0;
+	private _cumulativeInputTokens = 0;
+	private _cumulativeOutputTokens = 0;
+	private _cumulativeToolCalls = 0;
+
 	// Bash execution state
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
@@ -438,7 +444,13 @@ export class AgentSession {
 			if (event.message.role === "assistant") {
 				this._lastAssistantMessage = event.message;
 
+				// Accumulate session stats that survive compaction (#1423)
 				const assistantMsg = event.message as AssistantMessage;
+				this._cumulativeCost += assistantMsg.usage?.cost?.total ?? 0;
+				this._cumulativeInputTokens += assistantMsg.usage?.input ?? 0;
+				this._cumulativeOutputTokens += assistantMsg.usage?.output ?? 0;
+				this._cumulativeToolCalls += assistantMsg.content.filter((c) => c.type === "toolCall").length;
+
 				if (assistantMsg.stopReason !== "error") {
 					this._overflowRecoveryAttempted = false;
 				}
@@ -3230,17 +3242,17 @@ export class AgentSession {
 			sessionId: this.sessionId,
 			userMessages,
 			assistantMessages,
-			toolCalls,
+			toolCalls: Math.max(toolCalls, this._cumulativeToolCalls),
 			toolResults,
 			totalMessages: state.messages.length,
 			tokens: {
-				input: totalInput,
-				output: totalOutput,
+				input: Math.max(totalInput, this._cumulativeInputTokens),
+				output: Math.max(totalOutput, this._cumulativeOutputTokens),
 				cacheRead: totalCacheRead,
 				cacheWrite: totalCacheWrite,
-				total: totalInput + totalOutput + totalCacheRead + totalCacheWrite,
+				total: Math.max(totalInput + totalOutput, this._cumulativeInputTokens + this._cumulativeOutputTokens) + totalCacheRead + totalCacheWrite,
 			},
-			cost: totalCost,
+			cost: Math.max(totalCost, this._cumulativeCost),
 		};
 	}
 
