@@ -24,6 +24,7 @@ import { writeVerificationJSON } from "./verification-evidence.js";
 import { removePersistedKey } from "./auto-recovery.js";
 import type { AutoSession, PendingVerificationRetry } from "./auto/session.js";
 import { join } from "node:path";
+import { getErrorMessage } from "./error-utils.js";
 
 export interface VerificationContext {
   s: AutoSession;
@@ -204,7 +205,7 @@ export async function runPostUnitVerification(
       try {
         await dispatchNextUnit(ctx, pi);
       } catch (retryDispatchErr) {
-        const msg = retryDispatchErr instanceof Error ? retryDispatchErr.message : String(retryDispatchErr);
+        const msg = getErrorMessage(retryDispatchErr);
         ctx.ui.notify(`Verification retry dispatch error: ${msg}`, "error");
         startDispatchGapWatchdog(ctx, pi);
       }

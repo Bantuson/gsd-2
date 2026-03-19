@@ -63,6 +63,7 @@ import { debugLog, enableDebug, isDebugEnabled, getDebugLogPath } from "./debug-
 import type { AutoSession } from "./auto/session.js";
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import { getErrorMessage } from "./error-utils.js";
 
 export interface BootstrapDeps {
   shouldUseWorktreeIsolation: () => boolean;
@@ -201,11 +202,11 @@ export async function bootstrapAutoSession(
         if (!midMatch) continue;
         const mid = midMatch[1];
         if (resolveMilestoneFile(base, mid, "SUMMARY")) {
-          try { unlinkSync(join(runtimeUnitsDir, file)); } catch (e) { debugLog("stale-unit-cleanup-failed", { file, error: e instanceof Error ? e.message : String(e) }); }
+          try { unlinkSync(join(runtimeUnitsDir, file)); } catch (e) { debugLog("stale-unit-cleanup-failed", { file, error: getErrorMessage(e) }); }
         }
       }
     }
-  } catch (e) { debugLog("stale-unit-dir-cleanup-failed", { error: e instanceof Error ? e.message : String(e) }); }
+  } catch (e) { debugLog("stale-unit-dir-cleanup-failed", { error: getErrorMessage(e) }); }
 
   let state = await deriveState(base);
 
@@ -343,7 +344,7 @@ export async function bootstrapAutoSession(
       registerSigtermHandler(s.originalBasePath);
     } catch (err) {
       ctx.ui.notify(
-        `Auto-worktree setup failed: ${err instanceof Error ? err.message : String(err)}. Continuing in project root.`,
+        `Auto-worktree setup failed: ${getErrorMessage(err)}. Continuing in project root.`,
         "warning",
       );
     }
@@ -435,7 +436,7 @@ export async function bootstrapAutoSession(
     }
   } catch (err) {
     ctx.ui.notify(
-      `Secrets check error: ${err instanceof Error ? err.message : String(err)}. Continuing without secrets.`,
+      `Secrets check error: ${getErrorMessage(err)}. Continuing without secrets.`,
       "warning",
     );
   }
@@ -453,7 +454,7 @@ export async function bootstrapAutoSession(
         ctx.ui.notify("Removed stale .git/index.lock from prior crash.", "info");
       }
     }
-  } catch (e) { debugLog("git-lock-cleanup-failed", { error: e instanceof Error ? e.message : String(e) }); }
+  } catch (e) { debugLog("git-lock-cleanup-failed", { error: getErrorMessage(e) }); }
 
   // Pre-flight: validate milestone queue
   try {

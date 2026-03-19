@@ -33,6 +33,7 @@ import {
   nativeAddPaths,
 } from "./native-git-bridge.js";
 import { GSDError, GSD_MERGE_CONFLICT, GSD_GIT_ERROR } from "./errors.js";
+import { getErrorMessage } from "./error-utils.js";
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -281,7 +282,7 @@ export function runGit(basePath: string, args: string[], options: { allowFailure
     }).trim();
   } catch (error) {
     if (options.allowFailure) return "";
-    const message = error instanceof Error ? error.message : String(error);
+    const message = getErrorMessage(error);
     throw new GSDError(GSD_GIT_ERROR, `git ${args.join(" ")} failed in ${basePath}: ${filterGitSvnNoise(message)}`);
   }
 }
@@ -533,7 +534,7 @@ export class GitServiceImpl {
       execSync(command, { cwd: this.basePath, stdio: "pipe", encoding: "utf-8" });
       return { passed: true, skipped: false, command };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = getErrorMessage(err);
       return { passed: false, skipped: false, command, error: msg };
     }
   }

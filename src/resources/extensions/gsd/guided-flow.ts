@@ -44,6 +44,7 @@ export {
   showQueue, handleQueueReorder, showQueueAdd,
   buildExistingMilestonesContext,
 } from "./guided-flow-queue.js";
+import { getErrorMessage } from "./error-utils.js";
 
 // ─── Commit Instruction Helpers ──────────────────────────────────────────────
 
@@ -158,9 +159,9 @@ export function checkAutoStartAfterDiscuss(): boolean {
 
   pendingAutoStart = null;
   startAuto(ctx, pi, basePath, false, { step }).catch((err) => {
-    ctx.ui.notify(`Auto-start failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+    ctx.ui.notify(`Auto-start failed: ${getErrorMessage(err)}`, "error");
     if (process.env.GSD_DEBUG) console.error('[gsd] auto start error:', err);
-    debugLog("auto-start-failed", { error: err instanceof Error ? err.message : String(err) });
+    debugLog("auto-start-failed", { error: getErrorMessage(err) });
   });
   return true;
 }

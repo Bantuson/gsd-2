@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { loadPrompt } from "./prompt-loader.js";
 import { gsdRoot } from "./paths.js";
 import { createGitService, runGit } from "./git-service.js";
+import { getErrorMessage } from "./error-utils.js";
 
 // ─── Quick Task Helpers ───────────────────────────────────────────────────────
 
@@ -122,7 +123,7 @@ export async function handleQuick(
       }
     } catch (err) {
       // Branch creation failed — continue on current branch
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       ctx.ui.notify(`Could not create branch ${branchName}: ${message}. Working on current branch.`, "warning");
     }
   }

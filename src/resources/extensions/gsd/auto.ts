@@ -189,6 +189,7 @@ import {
   NEW_SESSION_TIMEOUT_MS, DISPATCH_HANG_TIMEOUT_MS,
 } from "./auto/session.js";
 import type { CompletedUnit, CurrentUnit, UnitRouting, StartModel, PendingVerificationRetry } from "./auto/session.js";
+import { getErrorMessage } from "./error-utils.js";
 
 // ── ENCAPSULATION INVARIANT ─────────────────────────────────────────────────
 // ALL mutable auto-mode state lives in the AutoSession class (auto/session.ts).
@@ -428,7 +429,7 @@ function startDispatchGapWatchdog(ctx: ExtensionContext, pi: ExtensionAPI): void
     try {
       await dispatchNextUnit(ctx, pi);
     } catch (retryErr) {
-      const message = retryErr instanceof Error ? retryErr.message : String(retryErr);
+      const message = getErrorMessage(retryErr);
       await stopAuto(ctx, pi, `Dispatch gap recovery failed: ${message}`);
       return;
     }
@@ -458,14 +459,14 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI, reason
   // ── Auto-worktree: exit worktree and reset s.basePath on stop ──
   if (s.currentMilestoneId && isInAutoWorktree(s.basePath)) {
     try {
-      try { autoCommitCurrentBranch(s.basePath, "stop", s.currentMilestoneId); } catch (e) { debugLog("stop-auto-commit-failed", { error: e instanceof Error ? e.message : String(e) }); }
+      try { autoCommitCurrentBranch(s.basePath, "stop", s.currentMilestoneId); } catch (e) { debugLog("stop-auto-commit-failed", { error: getErrorMessage(e) }); }
       teardownAutoWorktree(s.originalBasePath, s.currentMilestoneId, { preserveBranch: true });
       s.basePath = s.originalBasePath;
       s.gitService = createGitService(s.basePath);
       ctx?.ui.notify("Exited auto-worktree (branch preserved for resume).", "info");
     } catch (err) {
       ctx?.ui.notify(
-        `Auto-worktree teardown failed: ${err instanceof Error ? err.message : String(err)}`,
+        `Auto-worktree teardown failed: ${getErrorMessage(err)}`,
         "warning",
       );
     }
@@ -476,7 +477,7 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI, reason
     try {
       const { closeDatabase } = await import("./gsd-db.js");
       closeDatabase();
-    } catch (e) { debugLog("db-close-failed", { error: e instanceof Error ? e.message : String(e) }); }
+    } catch (e) { debugLog("db-close-failed", { error: getErrorMessage(e) }); }
   }
 
   if (s.originalBasePath) {
@@ -496,7 +497,7 @@ export async function stopAuto(ctx?: ExtensionContext, pi?: ExtensionAPI, reason
   }
 
   if (s.basePath) {
-    try { await rebuildState(s.basePath); } catch (e) { debugLog("stop-rebuild-state-failed", { error: e instanceof Error ? e.message : String(e) }); }
+    try { await rebuildState(s.basePath); } catch (e) { debugLog("stop-rebuild-state-failed", { error: getErrorMessage(e) }); }
   }
 
   if (isDebugEnabled()) {
@@ -635,7 +636,7 @@ export async function startAuto(
         }
       } catch (err) {
         ctx.ui.notify(
-          `Auto-worktree re-entry failed: ${err instanceof Error ? err.message : String(err)}. Continuing at current path.`,
+          `Auto-worktree re-entry failed: ${getErrorMessage(err)}. Continuing at current path.`,
           "warning",
         );
       }
@@ -647,13 +648,13 @@ export async function startAuto(
     ctx.ui.setFooter(hideFooter);
     ctx.ui.notify(s.stepMode ? "Step-mode resumed." : "Auto-mode resumed.", "info");
     restoreHookState(s.basePath);
-    try { await rebuildState(s.basePath); } catch (e) { debugLog("resume-rebuild-state-failed", { error: e instanceof Error ? e.message : String(e) }); }
+    try { await rebuildState(s.basePath); } catch (e) { debugLog("resume-rebuild-state-failed", { error: getErrorMessage(e) }); }
     try {
       const report = await runGSDDoctor(s.basePath, { fix: true });
       if (report.fixesApplied.length > 0) {
         ctx.ui.notify(`Resume: applied ${report.fixesApplied.length} fix(es) to state.`, "info");
       }
-    } catch (e) { debugLog("resume-doctor-failed", { error: e instanceof Error ? e.message : String(e) }); }
+    } catch (e) { debugLog("resume-doctor-failed", { error: getErrorMessage(e) }); }
     await selfHealRuntimeRecords(s.basePath, ctx, s.completedKeySet);
     invalidateAllCaches();
 
@@ -700,7 +701,7 @@ export async function startAuto(
         }
       } catch (err) {
         ctx.ui.notify(
-          `Secrets check error: ${err instanceof Error ? err.message : String(err)}. Continuing without secrets.`,
+          `Secrets check error: ${getErrorMessage(err)}. Continuing without secrets.`,
           "warning",
         );
       }
@@ -807,7 +808,7 @@ export async function handleAgentEnd(
   try {
     await dispatchNextUnit(ctx, pi);
   } catch (dispatchErr) {
-    const message = dispatchErr instanceof Error ? dispatchErr.message : String(dispatchErr);
+    const message = getErrorMessage(dispatchErr);
     ctx.ui.notify(
       `Dispatch error after unit completion: ${message}. Retrying in ${DISPATCH_GAP_TIMEOUT_MS / 1000}s.`,
       "error",
@@ -838,7 +839,7 @@ export async function handleAgentEnd(
       clearDispatchGapWatchdog();
       setImmediate(() => {
         handleAgentEnd(ctx, pi).catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err);
+          const msg = getErrorMessage(err);
           ctx.ui.notify(`Deferred agent_end retry failed: ${msg}`, "error");
           pauseAuto(ctx, pi).catch(() => {});
         });
@@ -1086,7 +1087,7 @@ async function dispatchNextUnit(
         );
       } catch (err) {
         ctx.ui.notify(
-          `Report generation failed: ${err instanceof Error ? err.message : String(err)}`,
+          `Report generation failed: ${getErrorMessage(err)}`,
           "warning",
         );
       }
@@ -1102,7 +1103,7 @@ async function dispatchNextUnit(
         atomicWriteSync(file, JSON.stringify([]));
       }
       s.completedKeySet.clear();
-    } catch (e) { debugLog("completed-keys-reset-failed", { error: e instanceof Error ? e.message : String(e) }); }
+    } catch (e) { debugLog("completed-keys-reset-failed", { error: getErrorMessage(e) }); }
 
     // ── Worktree lifecycle on milestone transition (#616) ──
     if (isInAutoWorktree(s.basePath) && s.originalBasePath && shouldUseWorktreeIsolation()) {
@@ -1121,7 +1122,7 @@ async function dispatchNextUnit(
         }
       } catch (err) {
         ctx.ui.notify(
-          `Milestone merge failed during transition: ${err instanceof Error ? err.message : String(err)}`,
+          `Milestone merge failed during transition: ${getErrorMessage(err)}`,
           "warning",
         );
         if (s.originalBasePath) {
@@ -1146,7 +1147,7 @@ async function dispatchNextUnit(
           ctx.ui.notify(`Created auto-worktree for ${mid} at ${wtPath}`, "info");
         } catch (err) {
           ctx.ui.notify(
-            `Auto-worktree creation for ${mid} failed: ${err instanceof Error ? err.message : String(err)}. Continuing in project root.`,
+            `Auto-worktree creation for ${mid} failed: ${getErrorMessage(err)}. Continuing in project root.`,
             "warning",
           );
         }
@@ -1190,7 +1191,7 @@ async function dispatchNextUnit(
           }
         } catch (err) {
           ctx.ui.notify(
-            `Milestone merge failed: ${err instanceof Error ? err.message : String(err)}`,
+            `Milestone merge failed: ${getErrorMessage(err)}`,
             "warning",
           );
           if (s.originalBasePath) {
@@ -1216,7 +1217,7 @@ async function dispatchNextUnit(
           }
         } catch (err) {
           ctx.ui.notify(
-            `Milestone merge failed (branch mode): ${err instanceof Error ? err.message : String(err)}`,
+            `Milestone merge failed (branch mode): ${getErrorMessage(err)}`,
             "warning",
           );
         }
@@ -1276,7 +1277,7 @@ async function dispatchNextUnit(
         atomicWriteSync(file, JSON.stringify([]));
       }
       s.completedKeySet.clear();
-    } catch (e) { debugLog("completed-keys-reset-failed", { error: e instanceof Error ? e.message : String(e) }); }
+    } catch (e) { debugLog("completed-keys-reset-failed", { error: getErrorMessage(e) }); }
     // ── Milestone merge ──
     if (s.currentMilestoneId && isInAutoWorktree(s.basePath) && s.originalBasePath) {
       try {
@@ -1292,7 +1293,7 @@ async function dispatchNextUnit(
         );
       } catch (err) {
         ctx.ui.notify(
-          `Milestone merge failed: ${err instanceof Error ? err.message : String(err)}`,
+          `Milestone merge failed: ${getErrorMessage(err)}`,
           "warning",
         );
         if (s.originalBasePath) {
@@ -1318,7 +1319,7 @@ async function dispatchNextUnit(
         }
       } catch (err) {
         ctx.ui.notify(
-          `Milestone merge failed (branch mode): ${err instanceof Error ? err.message : String(err)}`,
+          `Milestone merge failed (branch mode): ${getErrorMessage(err)}`,
           "warning",
         );
       }
@@ -1417,7 +1418,7 @@ async function dispatchNextUnit(
       }
     } catch (err) {
       ctx.ui.notify(
-        `Secrets collection error: ${err instanceof Error ? err.message : String(err)}. Continuing with next task.`,
+        `Secrets collection error: ${getErrorMessage(err)}. Continuing with next task.`,
         "warning",
       );
     }
@@ -1628,7 +1629,7 @@ async function dispatchNextUnit(
     );
     result = await Promise.race([sessionPromise, timeoutPromise]);
   } catch (sessionErr) {
-    const msg = sessionErr instanceof Error ? sessionErr.message : String(sessionErr);
+    const msg = getErrorMessage(sessionErr);
     ctx.ui.notify(`Session creation failed: ${msg}. Retrying via watchdog.`, "error");
     throw new Error(`newSession() failed: ${msg}`);
   }
@@ -1704,7 +1705,7 @@ async function dispatchNextUnit(
     const { reorderForCaching } = await import("./prompt-ordering.js");
     finalPrompt = reorderForCaching(finalPrompt);
   } catch (reorderErr) {
-    const msg = reorderErr instanceof Error ? reorderErr.message : String(reorderErr);
+    const msg = getErrorMessage(reorderErr);
     process.stderr.write(`[gsd] prompt reorder failed (non-fatal): ${msg}\n`);
   }
 

@@ -9,6 +9,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, renameSync, cpSync, rmSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { externalGsdRoot } from "./repo-identity.js";
+import { getErrorMessage } from "./error-utils.js";
 
 export interface MigrationResult {
   migrated: boolean;
@@ -47,7 +48,7 @@ export function migrateToExternalState(basePath: string): MigrationResult {
       return { migrated: false, error: ".gsd exists but is not a directory or symlink" };
     }
   } catch (err) {
-    return { migrated: false, error: `Cannot stat .gsd: ${err instanceof Error ? err.message : String(err)}` };
+    return { migrated: false, error: `Cannot stat .gsd: ${getErrorMessage(err)}` };
   }
 
   const externalPath = externalGsdRoot(basePath);
@@ -114,7 +115,7 @@ export function migrateToExternalState(basePath: string): MigrationResult {
 
     return {
       migrated: false,
-      error: `Migration failed: ${err instanceof Error ? err.message : String(err)}`,
+      error: `Migration failed: ${getErrorMessage(err)}`,
     };
   }
 }

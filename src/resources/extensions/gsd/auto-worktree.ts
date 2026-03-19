@@ -38,6 +38,7 @@ import {
   nativeBranchDelete,
   nativeBranchExists,
 } from "./native-git-bridge.js";
+import { getErrorMessage } from "./error-utils.js";
 
 // ─── Module State ──────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ export function runWorktreePostCreateHook(sourceDir: string, worktreeDir: string
     });
     return null;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = getErrorMessage(err);
     return `Worktree post-create hook failed: ${msg}`;
   }
 }
@@ -141,7 +142,7 @@ export function createAutoWorktree(basePath: string, milestoneId: string): strin
     // Don't store originalBase -- caller can retry or clean up.
     throw new GSDError(
       GSD_IO_ERROR,
-      `Auto-worktree created at ${info.path} but chdir failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Auto-worktree created at ${info.path} but chdir failed: ${getErrorMessage(err)}`,
     );
   }
 
@@ -168,7 +169,7 @@ export function teardownAutoWorktree(
   } catch (err) {
     throw new GSDError(
       GSD_IO_ERROR,
-      `Failed to chdir back to ${originalBasePath} during teardown: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to chdir back to ${originalBasePath} during teardown: ${getErrorMessage(err)}`,
     );
   }
 
@@ -274,7 +275,7 @@ export function enterAutoWorktree(basePath: string, milestoneId: string): string
   } catch (err) {
     throw new GSDError(
       GSD_IO_ERROR,
-      `Failed to enter auto-worktree at ${p}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to enter auto-worktree at ${p}: ${getErrorMessage(err)}`,
     );
   }
 

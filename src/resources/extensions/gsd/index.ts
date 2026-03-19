@@ -64,6 +64,7 @@ import { pauseAutoForProviderError, classifyProviderError } from "./provider-err
 import { toPosixPath } from "../shared/mod.js";
 import { isParallelActive, shutdownParallel } from "./parallel-orchestrator.js";
 import { DEFAULT_BASH_TIMEOUT_SECS } from "./constants.js";
+import { getErrorMessage } from "./error-utils.js";
 
 /**
  * Ensure the GSD database is available, auto-initializing if needed.
@@ -374,7 +375,7 @@ export default function (pi: ExtensionAPI) {
           details: { operation: "save_decision", id },
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = getErrorMessage(err);
         process.stderr.write(`gsd-db: gsd_save_decision tool failed: ${msg}\n`);
         return {
           content: [{ type: "text" as const, text: `Error saving decision: ${msg}` }],
@@ -445,7 +446,7 @@ export default function (pi: ExtensionAPI) {
           details: { operation: "update_requirement", id: params.id },
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = getErrorMessage(err);
         process.stderr.write(`gsd-db: gsd_update_requirement tool failed: ${msg}\n`);
         return {
           content: [{ type: "text" as const, text: `Error updating requirement: ${msg}` }],
@@ -525,7 +526,7 @@ export default function (pi: ExtensionAPI) {
           details: { operation: "save_summary", path: relativePath, artifact_type: params.artifact_type },
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = getErrorMessage(err);
         process.stderr.write(`gsd-db: gsd_save_summary tool failed: ${msg}\n`);
         return {
           content: [{ type: "text" as const, text: `Error saving artifact: ${msg}` }],
@@ -574,7 +575,7 @@ export default function (pi: ExtensionAPI) {
           details: { operation: "generate_milestone_id", id: newId, existingCount: existingIds.length, reservedCount: reservedMilestoneIds.size, uniqueEnabled },
         };
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = getErrorMessage(err);
         return {
           content: [{ type: "text" as const, text: `Error generating milestone ID: ${msg}` }],
           isError: true,
@@ -993,7 +994,7 @@ export default function (pi: ExtensionAPI) {
     } catch (err) {
       // Safety net: if handleAgentEnd throws despite its internal try-catch,
       // ensure auto-mode stops gracefully instead of silently stalling (#381).
-      const message = err instanceof Error ? err.message : String(err);
+      const message = getErrorMessage(err);
       ctx.ui.notify(
         `Auto-mode error in agent_end handler: ${message}. Stopping auto-mode.`,
         "error",
