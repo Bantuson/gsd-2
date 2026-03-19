@@ -25,6 +25,7 @@ import { removePersistedKey } from "./auto-recovery.js";
 import type { AutoSession, PendingVerificationRetry } from "./auto/session.js";
 import { join } from "node:path";
 import { getErrorMessage } from "./error-utils.js";
+import { parseUnitId } from "./unit-id.js";
 
 export interface VerificationContext {
   s: AutoSession;
@@ -58,10 +59,9 @@ export async function runPostUnitVerification(
     const prefs = effectivePrefs?.preferences;
 
     // Read task plan verify field
-    const parts = s.currentUnit.id.split("/");
+    const { milestone: mid, slice: sid, task: tid } = parseUnitId(s.currentUnit.id);
     let taskPlanVerify: string | undefined;
-    if (parts.length >= 3) {
-      const [mid, sid, tid] = parts;
+    if (mid && sid && tid) {
       const planFile = resolveSliceFile(s.basePath, mid, sid, "PLAN");
       if (planFile) {
         const planContent = await loadFile(planFile);
@@ -153,9 +153,8 @@ export async function runPostUnitVerification(
 
     // Write verification evidence JSON
     const attempt = s.verificationRetryCount.get(s.currentUnit.id) ?? 0;
-    if (parts.length >= 3) {
+    if (mid && sid && tid) {
       try {
-        const [mid, sid, tid] = parts;
         const sDir = resolveSlicePath(s.basePath, mid, sid);
         if (sDir) {
           const tasksDir = join(sDir, "tasks");

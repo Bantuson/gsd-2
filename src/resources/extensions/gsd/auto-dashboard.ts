@@ -20,6 +20,7 @@ import { parseRoadmap, parsePlan } from "./files.js";
 import { readFileSync, existsSync } from "node:fs";
 import { truncateToWidth, visibleWidth } from "@gsd/pi-tui";
 import { makeUI, GLYPH, INDENT } from "../shared/mod.js";
+import { parseUnitId } from "./unit-id.js";
 
 // ─── Dashboard Data ───────────────────────────────────────────────────────────
 
@@ -372,8 +373,9 @@ export function updateProgressWidget(
         lines.push("");
 
         const isHook = unitType.startsWith("hook/");
+        const hookParsed = isHook ? parseUnitId(unitId) : undefined;
         const target = isHook
-          ? (unitId.split("/").pop() ?? unitId)
+          ? (hookParsed!.task ?? hookParsed!.slice ?? unitId)
           : (task ? `${task.id}: ${task.title}` : unitId);
         const actionLeft = `${pad}${theme.fg("accent", "▸")} ${theme.fg("accent", verb)}  ${theme.fg("text", target)}`;
         const tierTag = tierBadge ? theme.fg("dim", `[${tierBadge}] `) : "";

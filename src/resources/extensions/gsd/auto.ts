@@ -105,6 +105,7 @@ import { computeBudgets, resolveExecutorContextWindow } from "./context-budget.j
 import { GSDError, GSD_ARTIFACT_MISSING } from "./errors.js";
 import { join } from "node:path";
 import { sep as pathSep } from "node:path";
+import { parseUnitId } from "./unit-id.js";
 import { readdirSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { atomicWriteSync } from "./atomic-write.js";
 import { nativeIsRepo, nativeInit, nativeAddAll, nativeCommit } from "./native-git-bridge.js";
@@ -1748,8 +1749,7 @@ async function dispatchNextUnit(
 function ensurePreconditions(
   unitType: string, unitId: string, base: string, state: GSDState,
 ): void {
-  const parts = unitId.split("/");
-  const mid = parts[0]!;
+  const { milestone: mid } = parseUnitId(unitId);
 
   const mDir = resolveMilestonePath(base, mid);
   if (!mDir) {
@@ -1757,8 +1757,8 @@ function ensurePreconditions(
     mkdirSync(join(newDir, "slices"), { recursive: true });
   }
 
-  if (parts.length >= 2) {
-    const sid = parts[1]!;
+  const sid = parseUnitId(unitId).slice;
+  if (sid) {
 
     const mDirResolved = resolveMilestonePath(base, mid);
     if (mDirResolved) {

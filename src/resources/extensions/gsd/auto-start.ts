@@ -64,6 +64,7 @@ import type { AutoSession } from "./auto/session.js";
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { getErrorMessage } from "./error-utils.js";
+import { parseUnitId } from "./unit-id.js";
 
 export interface BootstrapDeps {
   shouldUseWorktreeIsolation: () => boolean;
@@ -139,7 +140,7 @@ export async function bootstrapAutoSession(
   if (crashLock && crashLock.pid !== process.pid) {
     // We already hold the session lock, so no concurrent session is running.
     // The crash lock is from a dead process — recover context from it.
-    const recoveredMid = crashLock.unitId.split("/")[0];
+    const recoveredMid = parseUnitId(crashLock.unitId).milestone;
     const milestoneAlreadyComplete = recoveredMid
       ? !!resolveMilestoneFile(base, recoveredMid, "SUMMARY")
       : false;

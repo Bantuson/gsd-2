@@ -61,6 +61,7 @@ import {
 } from "./auto-dashboard.js";
 import { join } from "node:path";
 import { STATE_REBUILD_MIN_INTERVAL_MS } from "./auto-constants.js";
+import { parseUnitId } from "./unit-id.js";
 
 /**
  * Initialize a unit dispatch: stamp the current time, set `s.currentUnit`,
@@ -134,8 +135,7 @@ export async function postUnitPreVerification(pctx: PostUnitContext): Promise<"d
       let taskContext: TaskCommitContext | undefined;
 
       if (s.currentUnit.type === "execute-task") {
-        const parts = s.currentUnit.id.split("/");
-        const [mid, sid, tid] = parts;
+        const { milestone: mid, slice: sid, task: tid } = parseUnitId(s.currentUnit.id);
         if (mid && sid && tid) {
           const summaryPath = resolveTaskFile(s.basePath, mid, sid, tid, "SUMMARY");
           if (summaryPath) {
@@ -167,8 +167,8 @@ export async function postUnitPreVerification(pctx: PostUnitContext): Promise<"d
 
     // Doctor: fix mechanical bookkeeping
     try {
-      const scopeParts = s.currentUnit.id.split("/").slice(0, 2);
-      const doctorScope = scopeParts.join("/");
+      const { milestone, slice } = parseUnitId(s.currentUnit.id);
+      const doctorScope = slice ? `${milestone}/${slice}` : milestone;
       const sliceTerminalUnits = new Set(["complete-slice", "run-uat"]);
       const effectiveFixLevel = sliceTerminalUnits.has(s.currentUnit.type) ? "all" as const : "task" as const;
       const report = await runGSDDoctor(s.basePath, { fix: true, scope: doctorScope, fixLevel: effectiveFixLevel });
@@ -348,7 +348,7 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
   // instead of dispatching LLM sessions for complete-slice / validate-milestone.
   if (s.currentUnit?.type === "execute-task" && !s.stepMode) {
     try {
-      const [mid, sid] = s.currentUnit.id.split("/");
+      const { milestone: mid, slice: sid } = parseUnitId(s.currentUnit.id);
       if (mid && sid) {
         const state = await deriveState(s.basePath);
         if (state.phase === "summarizing" && state.activeSlice?.id === sid) {
