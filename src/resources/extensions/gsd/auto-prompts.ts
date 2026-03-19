@@ -189,6 +189,38 @@ export async function inlineGsdRootFile(
 // ─── DB-Aware Inline Helpers ──────────────────────────────────────────────
 
 /**
+ * Shared DB-fallback pattern: attempt a DB query via the context-store, format
+ * the result, and fall back to the filesystem file when the DB is unavailable
+ * or the query yields no results.
+ *
+ * @param base       Project root for filesystem fallback
+ * @param label      Section heading (e.g. "Decisions")
+ * @param filename   Filesystem fallback file (e.g. "decisions.md")
+ * @param queryDb    Async callback receiving the dynamically-imported
+ *                   context-store module. Returns formatted markdown or null.
+ */
+async function inlineFromDbOrFile(
+  base: string,
+  label: string,
+  filename: string,
+  queryDb: (cs: typeof import("./context-store.js")) => string | null,
+): Promise<string | null> {
+  try {
+    const { isDbAvailable } = await import("./gsd-db.js");
+    if (isDbAvailable()) {
+      const contextStore = await import("./context-store.js");
+      const content = queryDb(contextStore);
+      if (content) {
+        return `### ${label}\nSource: \`.gsd/${filename.toUpperCase().replace(/\.MD$/i, "")}.md\`\n\n${content}`;
+      }
+    }
+  } catch {
+    // DB not available — fall through to filesystem
+  }
+  return inlineGsdRootFile(base, filename, label);
+}
+
+/**
  * Inline decisions with optional milestone scoping from the DB.
  * Falls back to filesystem via inlineGsdRootFile when DB unavailable or empty.
  */
@@ -196,23 +228,13 @@ export async function inlineDecisionsFromDb(
   base: string, milestoneId?: string, scope?: string, level?: InlineLevel,
 ): Promise<string | null> {
   const inlineLevel = level ?? resolveInlineLevel();
-  try {
-    const { isDbAvailable } = await import("./gsd-db.js");
-    if (isDbAvailable()) {
-      const { queryDecisions, formatDecisionsForPrompt } = await import("./context-store.js");
-      const decisions = queryDecisions({ milestoneId, scope });
-      if (decisions.length > 0) {
-        // Use compact format for non-full levels to save ~35% tokens
-        const formatted = inlineLevel !== "full"
-          ? formatDecisionsCompact(decisions)
-          : formatDecisionsForPrompt(decisions);
-        return `### Decisions\nSource: \`.gsd/DECISIONS.md\`\n\n${formatted}`;
-      }
-    }
-  } catch {
-    // DB not available — fall through to filesystem
-  }
-  return inlineGsdRootFile(base, "decisions.md", "Decisions");
+  return inlineFromDbOrFile(base, "Decisions", "decisions.md", (cs) => {
+    const decisions = cs.queryDecisions({ milestoneId, scope });
+    if (decisions.length === 0) return null;
+    return inlineLevel !== "full"
+      ? formatDecisionsCompact(decisions)
+      : cs.formatDecisionsForPrompt(decisions);
+  });
 }
 
 /**
@@ -223,23 +245,13 @@ export async function inlineRequirementsFromDb(
   base: string, sliceId?: string, level?: InlineLevel,
 ): Promise<string | null> {
   const inlineLevel = level ?? resolveInlineLevel();
-  try {
-    const { isDbAvailable } = await import("./gsd-db.js");
-    if (isDbAvailable()) {
-      const { queryRequirements, formatRequirementsForPrompt } = await import("./context-store.js");
-      const requirements = queryRequirements({ sliceId });
-      if (requirements.length > 0) {
-        // Use compact format for non-full levels to save ~40% tokens
-        const formatted = inlineLevel !== "full"
-          ? formatRequirementsCompact(requirements)
-          : formatRequirementsForPrompt(requirements);
-        return `### Requirements\nSource: \`.gsd/REQUIREMENTS.md\`\n\n${formatted}`;
-      }
-    }
-  } catch {
-    // DB not available — fall through to filesystem
-  }
-  return inlineGsdRootFile(base, "requirements.md", "Requirements");
+  return inlineFromDbOrFile(base, "Requirements", "requirements.md", (cs) => {
+    const requirements = cs.queryRequirements({ sliceId });
+    if (requirements.length === 0) return null;
+    return inlineLevel !== "full"
+      ? formatRequirementsCompact(requirements)
+      : cs.formatRequirementsForPrompt(requirements);
+  });
 }
 
 /**
@@ -249,19 +261,9 @@ export async function inlineRequirementsFromDb(
 export async function inlineProjectFromDb(
   base: string,
 ): Promise<string | null> {
-  try {
-    const { isDbAvailable } = await import("./gsd-db.js");
-    if (isDbAvailable()) {
-      const { queryProject } = await import("./context-store.js");
-      const content = queryProject();
-      if (content) {
-        return `### Project\nSource: \`.gsd/PROJECT.md\`\n\n${content}`;
-      }
-    }
-  } catch {
-    // DB not available — fall through to filesystem
-  }
-  return inlineGsdRootFile(base, "project.md", "Project");
+  return inlineFromDbOrFile(base, "Project", "project.md", (cs) => {
+    return cs.queryProject();
+  });
 }
 
 // ─── Skill Discovery ──────────────────────────────────────────────────────
