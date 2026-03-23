@@ -3,13 +3,16 @@
  * Returns GSD-relevant commits (docs, feat, fix, refactor prefixes).
  * Also provides /api/git/status for Code Explorer git coloring.
  * Follows route dispatcher pattern from fs-api.ts.
+ *
+ * Security hardening (T-EXEC-01 B24): All git invocations use execFile/spawn with
+ * array arguments — no exec() or execSync() with string template literals.
  */
 
-import { spawn as nodeSpawn, exec } from "node:child_process";
+import { spawn as nodeSpawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve, isAbsolute } from "node:path";
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface GitCommit {
   hash: string;
@@ -82,15 +85,18 @@ export interface GitFileStatus {
 /**
  * Run git status --porcelain in the given root directory.
  * Returns [] if not a git repo or git is not available.
+ * Uses execFile with array arguments — no shell interpolation.
  */
 export async function getGitStatus(root: string): Promise<GitFileStatus[]> {
   if (!root) return [];
   try {
     const resolvedRoot = resolve(root);
-    const { stdout } = await execAsync("git status --porcelain -u", {
-      cwd: resolvedRoot,
-      timeout: 3000,
-    });
+    // Use execFile with array args — no string-interpolated shell command
+    const { stdout } = await execFileAsync(
+      "git",
+      ["status", "--porcelain", "-u"],
+      { cwd: resolvedRoot, timeout: 3000 }
+    );
     const files: GitFileStatus[] = [];
     for (const line of stdout.split("\n")) {
       if (!line.trim()) continue;
