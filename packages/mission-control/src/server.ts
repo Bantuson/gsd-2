@@ -72,6 +72,15 @@ async function registerWindow(windowId: string): Promise<number> {
 //
 // If Mission Control ever becomes a multi-user or network-accessible service,
 // HTTP authentication (e.g., bearer token, session cookie) would be required.
+// T-NET-01 B37: Allowed Host headers for DNS rebinding prevention
+const ALLOWED_HOSTS = new Set([
+  `127.0.0.1:${HTTP_PORT}`,
+  `localhost:${HTTP_PORT}`,
+]);
+
+// T-NET-02 B41: Maximum allowed request body size (10 MB)
+const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10_000_000 bytes
+
 const server = Bun.serve({
   port: HTTP_PORT,
   hostname: "127.0.0.1",
@@ -82,6 +91,26 @@ const server = Bun.serve({
   async fetch(req) {
     const url = new URL(req.url);
     const { pathname } = url;
+
+    // T-NET-01 B37: Host header validation — prevents DNS rebinding attacks.
+    // The Host header is validated before any route dispatch.
+    const host = req.headers.get("host");
+    if (host && !ALLOWED_HOSTS.has(host)) {
+      return new Response(JSON.stringify({ error: "Invalid Host header" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // T-NET-02 B41: Body size limit — reject requests with Content-Length > 10 MB.
+    // This prevents resource exhaustion from oversized request bodies.
+    const contentLength = req.headers.get("content-length");
+    if (contentLength && parseInt(contentLength, 10) > MAX_BODY_SIZE) {
+      return new Response(JSON.stringify({ error: "Request body too large" }), {
+        status: 413,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     // Route /api/auth/* to auth handler
     if (pathname.startsWith("/api/auth/")) {

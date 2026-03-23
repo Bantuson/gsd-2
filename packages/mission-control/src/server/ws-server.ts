@@ -51,6 +51,14 @@ const TOPIC = "planning-state";
 const CHAT_TOPIC = "chat";
 
 /**
+ * T-NET-01 B38: Allowed WebSocket upgrade origins.
+ * Only Tauri app and file:// origins are permitted. Requests from web origins
+ * (e.g. evil.com) are rejected with 403 to prevent cross-site WebSocket hijacking.
+ * A missing/null Origin header (same-process IPC) is also allowed.
+ */
+const allowedOrigins = new Set(["tauri://localhost", "file://"]);
+
+/**
  * Creates a WebSocket server on the specified port.
  *
  * - On client connect: sends full state with type "full"
@@ -79,6 +87,16 @@ export function createWsServer(options: WsServerOptions): WsServer {
     // If Mission Control ever becomes a multi-user or network-accessible service,
     // WebSocket authentication (e.g., token in upgrade request) would be required.
     fetch(req, server) {
+      // T-NET-01 B38: Validate Origin header on WebSocket upgrade to prevent
+      // cross-site WebSocket hijacking. Missing Origin (IPC/Tauri) is allowed.
+      const origin = req.headers.get("origin");
+      if (origin && !allowedOrigins.has(origin)) {
+        return new Response(JSON.stringify({ error: "Origin not allowed" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
       const upgraded = server.upgrade(req);
       if (upgraded) return undefined;
       return new Response("Mission Control WebSocket Server", { status: 200 });

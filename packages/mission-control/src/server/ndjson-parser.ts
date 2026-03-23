@@ -110,16 +110,37 @@ export interface NdjsonParser {
   flush(): void;
 }
 
+/**
+ * T-NET-02 B42: Maximum NDJSON line length cap (1 MB = 1_048_576 bytes).
+ * Lines exceeding this limit are silently dropped to prevent memory exhaustion
+ * from pathological AI provider responses.
+ */
+const MAX_LINE_LENGTH = 1_048_576;
+
 export function createNdjsonParser(onEvent: (event: StreamEvent) => void): NdjsonParser {
   let buffer = "";
 
   return {
     push(chunk: string) {
       buffer += chunk;
+
+      // T-NET-02 B42: If the buffer grows beyond the line length cap without a newline,
+      // discard accumulated data to prevent memory exhaustion.
+      if (buffer.length > MAX_LINE_LENGTH && !buffer.includes("\n")) {
+        console.warn(`[ndjson-parser] Buffer exceeded ${MAX_LINE_LENGTH} bytes without newline — discarding`);
+        buffer = "";
+        return;
+      }
+
       const lines = buffer.split("\n");
       // Last element is either empty (if chunk ended with \n) or an incomplete line
       buffer = lines.pop()!;
       for (const line of lines) {
+        // T-NET-02 B42: Skip lines that exceed the maximum line length cap
+        if (line.length > MAX_LINE_LENGTH) {
+          console.warn(`[ndjson-parser] NDJSON line exceeded max length (${line.length} > ${MAX_LINE_LENGTH}) — skipping`);
+          continue;
+        }
         const event = parseNdjsonLine(line);
         if (event) {
           onEvent(event);
@@ -128,9 +149,14 @@ export function createNdjsonParser(onEvent: (event: StreamEvent) => void): Ndjso
     },
     flush() {
       if (buffer.trim()) {
-        const event = parseNdjsonLine(buffer);
-        if (event) {
-          onEvent(event);
+        // T-NET-02 B42: Also cap the final buffered line on flush
+        if (buffer.length <= MAX_LINE_LENGTH) {
+          const event = parseNdjsonLine(buffer);
+          if (event) {
+            onEvent(event);
+          }
+        } else {
+          console.warn(`[ndjson-parser] Final buffer line exceeded max length — discarding`);
         }
       }
       buffer = "";
