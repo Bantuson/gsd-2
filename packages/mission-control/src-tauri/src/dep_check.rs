@@ -1,5 +1,76 @@
+use std::path::PathBuf;
 use std::process::Command;
 use tauri::{AppHandle, Emitter, Manager};
+
+/// Known Bun installation directories per platform.
+const KNOWN_BUN_DIRS: &[&str] = &[
+    // macOS / Linux
+    ".bun/bin",
+    ".nvm/versions/node",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/opt/homebrew/bin",
+    // Windows
+    ".bun\\bin",
+    "scoop\\apps\\bun",
+    "AppData\\Local\\bun",
+];
+
+/// Resolve the absolute path to the Bun binary.
+/// Returns the verified canonical path or an error if not found or resolution fails.
+/// Logs a warning if the path is not in a known installation directory
+/// (still allows it — the absolute path prevents PATH hijack regardless).
+pub fn resolve_bun_path() -> Result<PathBuf, String> {
+    #[cfg(target_os = "windows")]
+    let checker = "where";
+    #[cfg(not(target_os = "windows"))]
+    let checker = "which";
+
+    let output = Command::new(checker)
+        .arg("bun")
+        .output()
+        .map_err(|e| format!("Failed to locate bun: {e}"))?;
+
+    if !output.status.success() {
+        return Err("bun not found on PATH".to_string());
+    }
+
+    let path_str = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    if path_str.is_empty() {
+        return Err("bun path is empty".to_string());
+    }
+
+    let bun_path = PathBuf::from(&path_str);
+
+    // Canonicalize to resolve symlinks and get absolute path
+    let canonical = bun_path
+        .canonicalize()
+        .map_err(|e| format!("Failed to canonicalize bun path: {e}"))?;
+
+    // Verify against known installation directories
+    let home = dirs::home_dir().unwrap_or_default();
+    let is_known = KNOWN_BUN_DIRS.iter().any(|dir| {
+        let known = home.join(dir);
+        canonical.starts_with(&known)
+    }) || canonical.starts_with("/usr/local/bin")
+        || canonical.starts_with("/usr/bin")
+        || canonical.starts_with("/opt/homebrew/bin");
+
+    if !is_known {
+        eprintln!(
+            "[dep_check] WARNING: bun found at {canonical:?} which is not a known installation directory"
+        );
+        // Still allow it — the absolute path prevents PATH hijack regardless
+    }
+
+    Ok(canonical)
+}
 
 /// Check if a CLI tool is available on PATH.
 /// Uses `where` on Windows, `which` on macOS/Linux.

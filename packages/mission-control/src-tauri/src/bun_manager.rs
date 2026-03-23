@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
+
+use crate::dep_check::resolve_bun_path;
 
 /// Holds the Bun server child process handle.
 pub struct BunState {
@@ -34,18 +37,82 @@ fn resolve_mc_dir() -> std::path::PathBuf {
 
 /// Spawn the Bun server. Emits `bun-started` to all windows when ready.
 /// Watches the process and emits `bun-crashed` if it exits unexpectedly.
+///
+/// Security hardening (T-EXEC-01):
+/// - Uses absolute, canonicalized Bun binary path (never bare "bun")
+/// - Clears all inherited environment variables (env_clear)
+/// - Passes only an explicit allowlist of safe env vars to the child process
 pub async fn spawn_bun_server(app: AppHandle) {
     let mc_dir = resolve_mc_dir();
 
-    #[cfg(target_os = "windows")]
-    let bun_bin = "bun.exe";
-    #[cfg(not(target_os = "windows"))]
-    let bun_bin = "bun";
+    // Resolve absolute path — NEVER use bare "bun" or "bun.exe"
+    let bun_path = match resolve_bun_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[bun_manager] Cannot resolve Bun binary path: {e}");
+            let _ = app.emit("bun-crashed", format!("Cannot find Bun: {e}"));
+            return;
+        }
+    };
 
-    let result = Command::new(bun_bin)
+    // Build explicit environment allowlist — do NOT clone parent env
+    let mut child_env: HashMap<String, String> = HashMap::new();
+
+    // Only include safe, necessary env vars
+    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        child_env.insert("HOME".to_string(), home.clone());
+        child_env.insert("USERPROFILE".to_string(), home);
+    }
+    if let Ok(lang) = std::env::var("LANG") {
+        child_env.insert("LANG".to_string(), lang);
+    }
+    if let Ok(term) = std::env::var("TERM") {
+        child_env.insert("TERM".to_string(), term);
+    }
+
+    // Fixed PATH: only system binary directories + bun's own directory
+    #[cfg(target_os = "windows")]
+    {
+        let system_root =
+            std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+        let bun_dir = bun_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        child_env.insert(
+            "PATH".to_string(),
+            format!("{bun_dir};{system_root}\\System32;{system_root}"),
+        );
+        child_env.insert("SystemRoot".to_string(), system_root);
+        if let Ok(tmp) = std::env::var("TEMP").or_else(|_| std::env::var("TMP")) {
+            child_env.insert("TEMP".to_string(), tmp.clone());
+            child_env.insert("TMP".to_string(), tmp);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let bun_dir = bun_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        child_env.insert(
+            "PATH".to_string(),
+            format!("{bun_dir}:/usr/local/bin:/usr/bin:/bin"),
+        );
+        if let Ok(tmp) = std::env::var("TMPDIR") {
+            child_env.insert("TMPDIR".to_string(), tmp);
+        }
+    }
+
+    // Only the vars above are passed. Injection vectors (runtime hooks, proxy
+    // overrides, and loader overrides) are intentionally excluded from this list.
+
+    let result = Command::new(&bun_path)
         .args(["run", "--cwd"])
         .arg(&mc_dir)
         .arg("start")
+        .env_clear() // Clear ALL inherited env
+        .envs(&child_env) // Set only allowlisted vars
         .spawn();
 
     match result {
