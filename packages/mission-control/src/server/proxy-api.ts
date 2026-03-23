@@ -26,20 +26,17 @@ const ALLOWED_PROXY_HOSTS = new Set([
 const ALLOWED_PROXY_PORTS = new Set([443]);
 
 /**
- * Internal-use ports that must never be proxied to, even on localhost.
+ * Internal-use ports >= 1024 that must never be proxied to, even on localhost.
+ * Ports < 1024 are already blocked by the privileged port range check below.
  * These are known service ports that would represent SSRF vectors.
  */
 const BLOCKED_LOCAL_PORTS = new Set([
-  5432, // PostgreSQL
-  5433, // PostgreSQL alt
-  3306, // MySQL
-  6379, // Redis
+  5432,  // PostgreSQL
+  5433,  // PostgreSQL alt
+  3306,  // MySQL
+  6379,  // Redis
   27017, // MongoDB
-  4001, // Internal WS server port
-  22,   // SSH
-  25,   // SMTP
-  110,  // POP3
-  143,  // IMAP
+  4001,  // Internal WS server port
 ]);
 
 const OFFLINE_HTML = `<!DOCTYPE html>
