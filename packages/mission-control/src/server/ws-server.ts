@@ -31,6 +31,12 @@ export interface WsServerOptions {
   onSessionAction?: (action: SessionAction, ws: ServerWebSocket) => void;
   /** Called when a new client connects, after initial state is sent. */
   onClientConnect?: (ws: ServerWebSocket) => void;
+  /**
+   * T-AUTH-01 B51: Per-launch secret token for WebSocket upgrade validation.
+   * Upgrade requests must supply this token as ?token=<value> or Authorization: Bearer <value>.
+   * If omitted, token validation is skipped (for backward compatibility in tests).
+   */
+  launchToken?: string;
 }
 
 export interface WsServer {
@@ -69,23 +75,12 @@ const allowedOrigins = new Set(["tauri://localhost", "file://"]);
  * - Monotonic sequence counter increments on every message sent
  */
 export function createWsServer(options: WsServerOptions): WsServer {
-  const { port, getFullState, onChatMessage, customCommands, onPermissionResponse, onSessionAction, onClientConnect } = options;
+  const { port, getFullState, onChatMessage, customCommands, onPermissionResponse, onSessionAction, onClientConnect, launchToken } = options;
   let sequence = 0;
 
   const server = Bun.serve({
     port,
     hostname: "127.0.0.1",
-    // SECURITY NOTE — Intentional: No authentication on WebSocket connections.
-    //
-    // This is an accepted design decision for a desktop application:
-    // 1. The server binds to 127.0.0.1 only (line above) — not accessible from the network
-    // 2. The local-process threat (any process on the machine can connect) is an accepted
-    //    risk for a single-user desktop app where the user controls all local processes
-    // 3. The X-Window-Id header is used for routing (session multiplexing) but is NOT
-    //    a security credential — it does not authenticate the connection
-    //
-    // If Mission Control ever becomes a multi-user or network-accessible service,
-    // WebSocket authentication (e.g., token in upgrade request) would be required.
     fetch(req, server) {
       // T-NET-01 B38: Validate Origin header on WebSocket upgrade to prevent
       // cross-site WebSocket hijacking. Missing Origin (IPC/Tauri) is allowed.
@@ -95,6 +90,20 @@ export function createWsServer(options: WsServerOptions): WsServer {
           status: 403,
           headers: { "Content-Type": "application/json" },
         });
+      }
+
+      // T-AUTH-01 B51: Validate per-launch token on WebSocket upgrade.
+      // Token must be supplied as ?token=<value> or Authorization: Bearer <value>.
+      if (launchToken) {
+        const url = new URL(req.url);
+        const wsToken = url.searchParams.get("token") ??
+          req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+        if (wsToken !== launchToken) {
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       }
 
       const upgraded = server.upgrade(req);

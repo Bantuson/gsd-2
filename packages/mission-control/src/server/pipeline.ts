@@ -34,6 +34,11 @@ export interface PipelineOptions {
    * When omitted, defaults to real ClaudeProcessManager with config options applied.
    */
   processFactory?: (cwd: string, opts?: { skipPermissions?: boolean }) => IProcessManager;
+  /**
+   * T-AUTH-01 B51: Per-launch secret token for WebSocket upgrade validation.
+   * When provided, all WS upgrade requests must include ?token=<value> or Authorization: Bearer <value>.
+   */
+  launchToken?: string;
 }
 
 export interface PipelineHandle {
@@ -64,7 +69,7 @@ export interface PipelineHandle {
 export async function startPipeline(
   options: PipelineOptions
 ): Promise<PipelineHandle> {
-  const { planningDir: initialPlanningDir, wsPort, reconcileMs = 5000, processFactory: injectedProcessFactory } = options;
+  const { planningDir: initialPlanningDir, wsPort, reconcileMs = 5000, processFactory: injectedProcessFactory, launchToken } = options;
 
   let planningDir = initialPlanningDir;
 
@@ -250,6 +255,7 @@ export async function startPipeline(
     port: wsPort,
     getFullState: () => currentState,
     customCommands: customCmds,
+    launchToken,
     onChatMessage: async (prompt: string, ws: ServerWebSocket, sessionId?: string) => {
       console.log(`[pipeline] Chat message: "${prompt.slice(0, 80)}" (session: ${sessionId ?? "default"})`);
 
