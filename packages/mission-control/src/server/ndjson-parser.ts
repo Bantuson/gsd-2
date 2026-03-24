@@ -125,21 +125,24 @@ export function createNdjsonParser(onEvent: (event: StreamEvent) => void): Ndjso
       buffer += chunk;
 
       // T-NET-02 B42: If the buffer grows beyond the line length cap without a newline,
-      // discard accumulated data to prevent memory exhaustion.
+      // throw to prevent memory exhaustion from pathological provider responses.
       if (buffer.length > MAX_LINE_LENGTH && !buffer.includes("\n")) {
-        console.warn(`[ndjson-parser] Buffer exceeded ${MAX_LINE_LENGTH} bytes without newline — discarding`);
         buffer = "";
-        return;
+        throw new Error(
+          `[ndjson-parser] NDJSON line exceeded maximum length (${MAX_LINE_LENGTH} bytes) — stream aborted`
+        );
       }
 
       const lines = buffer.split("\n");
       // Last element is either empty (if chunk ended with \n) or an incomplete line
       buffer = lines.pop()!;
       for (const line of lines) {
-        // T-NET-02 B42: Skip lines that exceed the maximum line length cap
+        // T-NET-02 B42: Throw on lines that exceed the maximum line length cap
         if (line.length > MAX_LINE_LENGTH) {
-          console.warn(`[ndjson-parser] NDJSON line exceeded max length (${line.length} > ${MAX_LINE_LENGTH}) — skipping`);
-          continue;
+          buffer = "";
+          throw new Error(
+            `[ndjson-parser] NDJSON line exceeded maximum length (${line.length} > ${MAX_LINE_LENGTH} bytes) — stream aborted`
+          );
         }
         const event = parseNdjsonLine(line);
         if (event) {
@@ -149,14 +152,16 @@ export function createNdjsonParser(onEvent: (event: StreamEvent) => void): Ndjso
     },
     flush() {
       if (buffer.trim()) {
-        // T-NET-02 B42: Also cap the final buffered line on flush
-        if (buffer.length <= MAX_LINE_LENGTH) {
-          const event = parseNdjsonLine(buffer);
-          if (event) {
-            onEvent(event);
-          }
-        } else {
-          console.warn(`[ndjson-parser] Final buffer line exceeded max length — discarding`);
+        // T-NET-02 B42: Also throw on oversized final buffered line on flush
+        if (buffer.length > MAX_LINE_LENGTH) {
+          buffer = "";
+          throw new Error(
+            `[ndjson-parser] Final NDJSON line exceeded maximum length (${MAX_LINE_LENGTH} bytes) — stream aborted`
+          );
+        }
+        const event = parseNdjsonLine(buffer);
+        if (event) {
+          onEvent(event);
         }
       }
       buffer = "";
