@@ -13,6 +13,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { X, Copy, Save, Maximize2, Minimize2, Eye, EyeOff } from "lucide-react";
 import { marked } from "marked";
+import DOMPurify from "dompurify";
+// sanitizeHtml provides a pre-configured DOMPurify wrapper (B25, B65)
+import { sanitizeHtml } from "../../lib/sanitize-html";
 import { FileTree } from "./FileTree";
 import { FileEditor } from "./FileEditor";
 import { useCodeExplorer } from "./useCodeExplorer";
@@ -340,7 +343,7 @@ export function CodeExplorer({ isOpen, onClose, projectRoot }: CodeExplorerProps
                   <div
                     className="md-preview p-6 overflow-auto h-full text-sm"
                     style={{ background: "#131A21" }}
-                    dangerouslySetInnerHTML={{ __html: marked.parse(fileContent) as string }}
+                    dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(marked.parse(fileContent) as string) }}
                   />
                 ) : (
                   <FileEditor
