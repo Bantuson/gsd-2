@@ -399,6 +399,35 @@ const server = Bun.serve({
       return addCorsHeaders(Response.json({ ok: true }));
     }
 
+    // POST /api/screenshot — receive base64 screenshot from Claude browser tool (T-DOS-01 B48)
+    // Applies a 5 MB cap on the base64 payload to prevent resource exhaustion.
+    if (pathname === "/api/screenshot" && req.method === "POST") {
+      const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024; // 5 MB
+      let body: { data?: string } = {};
+      try {
+        body = await req.json() as { data?: string };
+      } catch {
+        return addCorsHeaders(Response.json({ error: "Invalid JSON" }, { status: 400 }));
+      }
+      const data = body.data ?? "";
+      // base64 string length in bytes is approximately (3/4) * length
+      // For a size cap we check the raw string length directly: 5 MB cap on base64 characters
+      if (data.length > MAX_SCREENSHOT_BYTES) {
+        return addCorsHeaders(Response.json({ error: "Screenshot payload too large (max 5 MB)" }, { status: 413 }));
+      }
+      // Forward to the active pipeline for browser state update processing
+      const pipeline = getPipelineForReq(req);
+      if (pipeline && data) {
+        try {
+          // Emit browser state update with the screenshot (pipeline handles WS broadcast)
+          pipeline.emit?.("browser_state_update", { screenshot: data });
+        } catch {
+          // Non-fatal: pipeline may not have emit — just accept and ignore
+        }
+      }
+      return addCorsHeaders(Response.json({ ok: true }));
+    }
+
     // POST /api/worktree/create — create a session worktree (T-FILE B13)
     if (pathname === "/api/worktree/create" && req.method === "POST") {
       try {

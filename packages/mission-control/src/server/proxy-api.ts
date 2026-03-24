@@ -5,8 +5,8 @@
  * Forwards /api/preview/* requests to the project's detected dev server.
  *
  * Key behaviors:
- * - Strips X-Frame-Options and Content-Security-Policy headers (Pitfall 2) only for
- *   the local dev server preview proxy (needed so the iframe can load)
+ * - Strips X-Frame-Options headers (Pitfall 2) only for the local dev server preview proxy
+ *   so the iframe can load. CSP is preserved (B39) — only X-Frame-Options is removed.
  * - Validates destination host/port against allowlists (T-NET-01)
  * - Strips X-Forwarded-* headers from forwarded requests (T-NET-01 B40)
  * - Returns a styled HTML offline page (status 200) when port is null or fetch fails
@@ -163,12 +163,11 @@ export async function handleProxyRequest(
     });
 
     // Build response headers for the iframe preview.
-    // Pitfall 2: X-Frame-Options and CSP from the upstream dev server would block iframe
-    // embedding. We construct the forwarded headers explicitly, omitting those two headers,
-    // so the iframe can load without stripping all other upstream headers.
-    // T-NET-01 B39: Security headers are preserved — we only omit the frame-embedding
-    // restrictions that are incompatible with the preview iframe use-case.
-    const IFRAME_STRIP_HEADERS = new Set(["x-frame-options", "content-security-policy"]);
+    // Pitfall 2: X-Frame-Options from the upstream dev server would block iframe embedding.
+    // We strip only X-Frame-Options (which explicitly prevents iframe embedding).
+    // T-NET-01 B39: CSP is intentionally NOT stripped — the upstream CSP must be preserved.
+    // Only X-Frame-Options is removed so the local dev server preview can load in the iframe.
+    const IFRAME_STRIP_HEADERS = new Set(["x-frame-options"]);
     const headers = new Headers();
     proxied.headers.forEach((value, key) => {
       if (!IFRAME_STRIP_HEADERS.has(key.toLowerCase())) {

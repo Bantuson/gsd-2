@@ -5,7 +5,9 @@
  * T-FILE-02: Write traversal and permissions (Behaviours 9-16)
  * T-FILE-03: Symlink escape and atomic port (Behaviours 17-18)
  *
- * RED PHASE: B1-B15, B17 expected to FAIL until Wave 2 remediations
+ * Phase 20.2.5 Security Behaviour Tests
+ * All tests in this file MUST be GREEN.
+ * Exceptions: B60, B61 (OAuth nonce binding — deferred to 20.2.6), B77 (CI signing key — deferred)
  *
  * All tests make actual HTTP requests against the running Bun server.
  * No readFileSync+regex assertions for behaviour verification.
@@ -51,7 +53,8 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
     // gsd-file-api: GET /api/gsd-file?sliceId=../../etc/passwd&type=plan
     const res = await makeRequest(
       server.baseUrl,
-      "/api/gsd-file?sliceId=../../etc/passwd&type=plan"
+      "/api/gsd-file?sliceId=../../etc/passwd&type=plan",
+      { token: server.token }
     );
 
     // RED: sliceId is not validated before path construction in gsd-file-api.ts
@@ -68,7 +71,8 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
     // gsd-file-api: GET /api/gsd-file?sliceId=S01&milestoneId=../secret&type=plan
     const res = await makeRequest(
       server.baseUrl,
-      "/api/gsd-file?sliceId=S01&milestoneId=../secret&type=plan"
+      "/api/gsd-file?sliceId=S01&milestoneId=../secret&type=plan",
+      { token: server.token }
     );
 
     // RED: milestoneId is concatenated directly into join() without validation
@@ -82,7 +86,8 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
     // gsd-file-api: GET /api/gsd-file?sliceId=S01&type=task&taskId=task%00id
     const res = await makeRequest(
       server.baseUrl,
-      "/api/gsd-file?sliceId=S01&type=task&taskId=task%00id"
+      "/api/gsd-file?sliceId=S01&type=task&taskId=task%00id",
+      { token: server.token }
     );
 
     // RED: taskId is not validated for null bytes
@@ -106,7 +111,8 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
       // The server uses projectRoot as allowedRoot for /api/fs/read
       const res = await makeRequest(
         server.baseUrl,
-        `/api/fs/read?path=${encodeURIComponent(evilFile)}`
+        `/api/fs/read?path=${encodeURIComponent(evilFile)}`,
+        { token: server.token }
       );
 
       // RED: validatePath with startsWith-only check would allow sibling prefix access
@@ -135,10 +141,11 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
 
       const res = await makeRequest(
         server.baseUrl,
-        `/api/fs/read?path=${encodeURIComponent(escapePath)}`
+        `/api/fs/read?path=${encodeURIComponent(escapePath)}`,
+        { token: server.token }
       );
 
-      // RED: validatePath uses resolve() not realpathSync(), so symlinks escape the workspace
+      // validatePath rejects symlinks escaping workspace
       expect([400, 403]).toContain(res.status);
 
       const body = await res.text();
@@ -152,7 +159,8 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
     // Send a request that would trigger a path-based error
     const res = await makeRequest(
       server.baseUrl,
-      "/api/gsd-file?sliceId=NONEXISTENT_SLICE_12345&type=plan"
+      "/api/gsd-file?sliceId=NONEXISTENT_SLICE_12345&type=plan",
+      { token: server.token }
     );
 
     const body = await res.text();
@@ -166,7 +174,8 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
 
     const res = await makeRequest(
       server.baseUrl,
-      `/api/fs/read?path=${encodeURIComponent(fakePath)}`
+      `/api/fs/read?path=${encodeURIComponent(fakePath)}`,
+      { token: server.token }
     );
 
     const body = await res.text();
@@ -187,6 +196,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
       {
         method: "POST",
         body: JSON.stringify({ sliceId: "../../.bashrc", items: [] }),
+        token: server.token,
       }
     );
 
@@ -203,6 +213,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
       {
         method: "POST",
         body: formData,
+        token: server.token,
       }
     );
 
@@ -219,6 +230,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
       {
         method: "POST",
         body: formData,
+        token: server.token,
       }
     );
 
@@ -233,6 +245,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
       {
         method: "POST",
         body: JSON.stringify({ path: "/tmp/test/../../../evil" }),
+        token: server.token,
       }
     );
 
@@ -247,6 +260,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
       {
         method: "POST",
         body: JSON.stringify({ path: "/etc/injected-dir-" + Date.now() }),
+        token: server.token,
       }
     );
 
@@ -265,6 +279,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
           sessionSlug: "../../evil",
           repoRoot: tmpdir(),
         }),
+        token: server.token,
       }
     );
 
@@ -290,6 +305,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
           sessionSlug: "../../etc",
           repoRoot: "/tmp",
         }),
+        token: server.token,
       }
     );
 
@@ -310,6 +326,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
         {
           method: "POST",
           body: JSON.stringify({ path: testPath, content: "test" }),
+          token: server.token,
         }
       );
 
@@ -364,11 +381,11 @@ describe("T-FILE-03 — Symlink Escape and Atomic Port", () => {
 
       const res = await makeRequest(
         server.baseUrl,
-        `/api/fs/read?path=${encodeURIComponent(escapePath)}`
+        `/api/fs/read?path=${encodeURIComponent(escapePath)}`,
+        { token: server.token }
       );
 
-      // RED: validatePath uses resolve() not realpathSync(), so symlinks are followed
-      // without actually resolving them against the real filesystem
+      // validatePath rejects symlinks escaping workspace
       expect([400, 403]).toContain(res.status);
 
       const body = await res.text();
@@ -387,6 +404,7 @@ describe("T-FILE-03 — Symlink Escape and Atomic Port", () => {
       {
         method: "POST",
         body: JSON.stringify({ windowId }),
+        token: server.token,
       }
     );
 

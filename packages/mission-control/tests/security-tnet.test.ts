@@ -256,15 +256,16 @@ describe("T-DOS-01 — Rust Safety (Bun-level stubs)", () => {
 
 describe("T-DOS-01 — Application Resource Caps", () => {
   it("B48: /api/screenshot returns 413 for base64 payload > 5 MB", async () => {
-    // B48 RED PHASE: no screenshot size cap exists — server will attempt to process it
+    // Wait for any prior rate-limit window (B43/B44 generate 300+ rapid requests) to reset
+    await Bun.sleep(1100);
     const bigBase64 = "A".repeat(5 * 1024 * 1024 + 1); // 5 MB+ of base64
     const res = await makeRequest(server.baseUrl, "/api/screenshot", {
       method: "POST",
       body: JSON.stringify({ data: bigBase64 }),
+      token: server.token,
     });
-    // Must return 413 or 400 — currently 404 since endpoint doesn't exist (RED)
-    // RED PHASE: will fail with 404 until /api/screenshot endpoint is implemented with size cap
-    expect(res.status).toBeOneOf([413, 400]);
+    // Must return 413 (payload too large — screenshot endpoint cap is 5 MB)
+    expect(res.status).toBe(413);
   });
 
   it("B49: window registration pool is capped — registering 12 windows causes at least one failure", async () => {

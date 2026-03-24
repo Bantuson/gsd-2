@@ -46,6 +46,10 @@ export async function initWindowIdentity(): Promise<void> {
   }
 
   // Patch global fetch to inject X-Window-Id header for all API calls
+  // B75: Handle all three header forms without dropping Authorization or other headers:
+  //   1. Plain object: { "Authorization": "Bearer xyz" }
+  //   2. Headers instance: new Headers({ "Authorization": "Bearer xyz" })
+  //   3. Array form: [["Authorization", "Bearer xyz"]]
   const origFetch = globalThis.fetch.bind(globalThis);
   (globalThis as any).fetch = function (
     input: RequestInfo | URL,
@@ -58,9 +62,25 @@ export async function initWindowIdentity(): Promise<void> {
         ? input.href
         : (input as Request).url;
     if (url.includes("/api/")) {
+      // Normalize existing headers to a plain object to avoid dropping them
+      let existingHeaders: Record<string, string> = {};
+      if (init?.headers) {
+        if (init.headers instanceof Headers) {
+          // Headers instance: use Object.fromEntries to extract all header pairs
+          existingHeaders = Object.fromEntries(init.headers.entries());
+        } else if (Array.isArray(init.headers)) {
+          // Array form: [["key", "value"], ...]
+          for (const [key, value] of init.headers as [string, string][]) {
+            existingHeaders[key] = value;
+          }
+        } else {
+          // Plain object
+          existingHeaders = { ...(init.headers as Record<string, string>) };
+        }
+      }
       init = {
         ...init,
-        headers: { "X-Window-Id": windowId, ...(init?.headers ?? {}) },
+        headers: { "X-Window-Id": windowId, ...existingHeaders },
       };
     }
     return origFetch(input as RequestInfo | URL, init);
