@@ -18,6 +18,7 @@ import { isTrusted, writeTrustFlag } from "./server/trust-api";
 import { handleClassifyIntentRequest } from "./server/classify-intent-api";
 import { handleAuthRequest } from "./server/auth-api";
 import { freePort } from "./server/kill-port";
+import { validateSlug, createSessionWorktree, removeSessionWorktree } from "./server/worktree-api";
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const publicDir = resolve(import.meta.dir, "../public");
@@ -292,6 +293,49 @@ const server = Bun.serve({
       const gsdDir = body.dir ?? getPipelineForReq(req)?.getPlanningDir() ?? resolve(repoRoot, ".gsd");
       await writeTrustFlag(gsdDir);
       return addCorsHeaders(Response.json({ ok: true }));
+    }
+
+    // POST /api/worktree/create — create a session worktree (T-FILE B13)
+    if (pathname === "/api/worktree/create" && req.method === "POST") {
+      try {
+        const body = await req.json() as { sessionSlug?: unknown; repoRoot?: unknown };
+        try {
+          validateSlug(body.sessionSlug);
+        } catch {
+          return addCorsHeaders(Response.json({ error: "Invalid session slug" }, { status: 400 }));
+        }
+        const slug = body.sessionSlug as string;
+        const root = typeof body.repoRoot === "string" ? body.repoRoot : repoRoot;
+        const result = await createSessionWorktree(root, slug);
+        if ("error" in result) {
+          return addCorsHeaders(Response.json({ error: result.error }, { status: 400 }));
+        }
+        return addCorsHeaders(Response.json(result));
+      } catch (err: any) {
+        return addCorsHeaders(Response.json({ error: "Internal server error" }, { status: 500 }));
+      }
+    }
+
+    // DELETE /api/worktree/session — remove a session worktree (T-FILE B14)
+    if (pathname === "/api/worktree/session" && req.method === "DELETE") {
+      try {
+        const body = await req.json() as { sessionSlug?: unknown; repoRoot?: unknown };
+        try {
+          validateSlug(body.sessionSlug);
+        } catch {
+          return addCorsHeaders(Response.json({ error: "Invalid session slug" }, { status: 400 }));
+        }
+        const slug = body.sessionSlug as string;
+        const root = typeof body.repoRoot === "string" ? body.repoRoot : repoRoot;
+        const worktreePath = `${root}/.worktrees/${slug}`;
+        const result = await removeSessionWorktree(root, worktreePath);
+        if (!result.ok) {
+          return addCorsHeaders(Response.json({ error: result.error ?? "Failed to remove worktree" }, { status: 400 }));
+        }
+        return addCorsHeaders(Response.json({ ok: true }));
+      } catch (err: any) {
+        return addCorsHeaders(Response.json({ error: "Internal server error" }, { status: 500 }));
+      }
     }
 
     // Handle CORS preflight for API routes

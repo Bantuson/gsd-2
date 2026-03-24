@@ -6,8 +6,33 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { readFile, writeFile, access } from "node:fs/promises";
-import { join } from "node:path";
-import { constants } from "node:fs";
+import { join, sep, resolve as pathResolve } from "node:path";
+import { constants, realpathSync } from "node:fs";
+
+/* ── slug validation ──────────────────────────────────────────── */
+
+/**
+ * T-FILE B13: Only allow alphanumeric characters, hyphens, and underscores in session slugs.
+ * Rejects null bytes, path separators, .. sequences, and any other non-identifier characters.
+ */
+const VALID_SLUG_RE = /^[a-zA-Z0-9_-]+$/;
+
+/**
+ * Validate a session slug for safe use in filesystem paths.
+ * Returns the validated slug or throws an error.
+ */
+export function validateSlug(slug: unknown): string {
+  if (!slug || typeof slug !== "string") {
+    throw new Error("Invalid session slug");
+  }
+  if (slug.includes("\x00") || slug.includes("..") || slug.includes("/") || slug.includes("\\")) {
+    throw new Error("Invalid session slug");
+  }
+  if (!VALID_SLUG_RE.test(slug)) {
+    throw new Error("Invalid session slug");
+  }
+  return slug;
+}
 
 /* ── git spawn helper ─────────────────────────────────────────── */
 
@@ -100,6 +125,13 @@ export async function createSessionWorktree(
   repoRoot: string,
   sessionSlug: string
 ): Promise<WorktreeCreateSuccess | WorktreeError> {
+  // T-FILE B13: Validate slug before using in path construction
+  try {
+    validateSlug(sessionSlug);
+  } catch {
+    return { error: "Invalid session slug" };
+  }
+
   const worktreePath = join(repoRoot, ".worktrees", sessionSlug).replace(
     /\\/g,
     "/"
@@ -137,6 +169,26 @@ export async function removeSessionWorktree(
   worktreePath: string,
   deleteBranch: boolean = false
 ): Promise<WorktreeRemoveResult> {
+  // T-FILE B14: Verify the resolved worktree path is within the repository root
+  // before executing any deletion. Prevents rm -rf outside workspace.
+  try {
+    const resolvedRepoRoot = realpathSync(repoRoot);
+    let resolvedWorktreePath: string;
+    try {
+      resolvedWorktreePath = realpathSync(worktreePath);
+    } catch {
+      // Path doesn't exist yet — fall back to normalize without following symlinks
+      resolvedWorktreePath = pathResolve(worktreePath);
+    }
+    if (!resolvedWorktreePath.startsWith(resolvedRepoRoot + sep)) {
+      console.error("[worktree-api] Blocked removal outside repo root:", resolvedWorktreePath);
+      return { ok: false, error: "Invalid worktree path" };
+    }
+  } catch (err) {
+    console.error("[worktree-api] Path containment check failed:", err);
+    return { ok: false, error: "Invalid worktree path" };
+  }
+
   // Normalize to forward slashes
   const normalizedPath = worktreePath.replace(/\\/g, "/");
 
@@ -184,6 +236,14 @@ export async function renameSessionWorktree(
   oldSlug: string,
   newSlug: string,
 ): Promise<WorktreeCreateSuccess | WorktreeError> {
+  // T-FILE B13: Validate both slugs before using in path construction
+  try {
+    validateSlug(oldSlug);
+    validateSlug(newSlug);
+  } catch {
+    return { error: "Invalid session slug" };
+  }
+
   const oldWorktreePath = join(repoRoot, ".worktrees", oldSlug).replace(/\\/g, "/");
   const newWorktreePath = join(repoRoot, ".worktrees", newSlug).replace(/\\/g, "/");
   const oldBranchName = `session/${oldSlug}`;
