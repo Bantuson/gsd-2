@@ -86,6 +86,42 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s \
             -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
+      # B77: Verify updater pubkey matches secret before build.
+      # Decodes the pubkey embedded in tauri.conf.json and compares against the
+      # TAURI_UPDATER_PUBKEY secret. A mismatch means the config was modified
+      # without updating the secret (or vice versa) — fail fast before the build.
+      - name: Verify updater pubkey matches secret
+        if: matrix.platform != 'windows-latest'
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          CONF_PUBKEY_B64=$(node -e "
+            const c = JSON.parse(require('fs').readFileSync('packages/mission-control/src-tauri/tauri.conf.json','utf8'));
+            console.log(c.plugins?.updater?.pubkey ?? c.tauri?.updater?.pubkey ?? '');
+          ")
+          CONF_PUBKEY=$(echo "$CONF_PUBKEY_B64" | base64 --decode)
+          if [ "$CONF_PUBKEY" != "$TAURI_UPDATER_PUBKEY" ]; then
+            echo "ERROR: updater pubkey in tauri.conf.json does not match TAURI_UPDATER_PUBKEY secret"
+            echo "  conf pubkey (decoded): $CONF_PUBKEY"
+            exit 1
+          fi
+          echo "Updater pubkey verification passed."
+
+      # B77: Windows version of the pubkey verification
+      - name: Verify updater pubkey matches secret (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          $confB64 = node -e "const c = JSON.parse(require('fs').readFileSync('packages/mission-control/src-tauri/tauri.conf.json','utf8')); console.log(c.plugins?.updater?.pubkey ?? c.tauri?.updater?.pubkey ?? '');"
+          $confPubkey = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($confB64.Trim()))
+          if ($confPubkey -ne $env:TAURI_UPDATER_PUBKEY) {
+            Write-Error "ERROR: updater pubkey in tauri.conf.json does not match TAURI_UPDATER_PUBKEY secret"
+            exit 1
+          }
+          Write-Output "Updater pubkey verification passed."
+
       # H8: Pinned to SHA — this action has access to Apple signing certs, GPG key, and
       # Tauri signing key. Floating tags (v0) can be moved by upstream maintainers.
       - name: Build and release with Tauri

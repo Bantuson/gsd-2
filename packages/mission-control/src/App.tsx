@@ -22,7 +22,11 @@ export default function App() {
         setGsdDir(data.gsdDir);
         setTrustStatus(data.trusted ? "trusted" : "needs_trust");
       })
-      .catch(() => setTrustStatus("trusted")); // fail open — don't block on network error
+      .catch((err: unknown) => {
+        console.error("[App] Trust check failed — treating as untrusted:", err);
+        // B73: SECURITY: fail closed — network error must NOT grant trust
+        setTrustStatus("needs_trust");
+      });
   }, [state.status]);
 
   // While checking keychain — show nothing (brief flash, avoids flicker)

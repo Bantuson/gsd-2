@@ -33,6 +33,17 @@ pub fn run() {
                 move |event: tauri_plugin_deep_link::OpenUrlEvent| {
                     for url in event.urls() {
                         let url_str = url.to_string();
+
+                        // B59: Reject OAuth deep link URLs longer than 2048 characters.
+                        // Overly long URLs may indicate injection or parameter stuffing attacks.
+                        if url_str.len() > 2048 {
+                            eprintln!(
+                                "[deep-link] URL too long ({} chars > 2048), rejected",
+                                url_str.len()
+                            );
+                            continue;
+                        }
+
                         if url_str.starts_with("gsd://oauth/callback") {
                             let params = parse_oauth_params(&url_str);
                             let _ = app_handle.emit("oauth-callback", params);
