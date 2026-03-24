@@ -398,6 +398,11 @@ const server = Bun.serve({
     if (pathname === "/api/trust" && req.method === "POST") {
       const body = await req.json() as { dir?: string };
       const gsdDir = body.dir ?? getPipelineForReq(req)?.getPlanningDir() ?? resolve(repoRoot, ".gsd");
+      // API-4: Validate dir is a .gsd directory (matches registerTrustRoutes validation)
+      const normalizedGsdDir = gsdDir.replace(/\\/g, "/");
+      if (!normalizedGsdDir.endsWith("/.gsd") && !normalizedGsdDir.includes("/.gsd/")) {
+        return addCorsHeaders(Response.json({ error: "dir must be a .gsd directory path" }, { status: 400 }));
+      }
       await writeTrustFlag(gsdDir);
       return addCorsHeaders(Response.json({ ok: true }));
     }
