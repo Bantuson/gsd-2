@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Ready to execute
-stopped_at: Completed 20.2.5-12-PLAN.md — Phase 20.2.5 security-behaviour-closure COMPLETE
-last_updated: "2026-03-24T14:19:21.298Z"
+stopped_at: Completed 20.2.5-13-PLAN.md — B52 WS session isolation closed
+last_updated: "2026-03-24T16:23:02Z"
 progress:
   total_phases: 17
   completed_phases: 13
   total_plans: 75
-  completed_plans: 77
+  completed_plans: 78
 ---
 
 # Project State
@@ -22,11 +22,11 @@ progress:
 ## Current Position
 
 Phase: 20.2.5 (security-behaviour-closure) — COMPLETE
-Plan: 12 of 12 (COMPLETE)
+Plan: 13 of 13 (COMPLETE)
 
 ## Progress
 
-`[██████████] 100%` — Phase 20.2.5 complete: all 53 FAIL + 11 PARTIAL security behaviours now PASS
+`[██████████] 100%` — Phase 20.2.5 complete: all security behaviours PASS including B52 WS session isolation
 
 ## Recent Decisions
 
@@ -38,6 +38,7 @@ Plan: 12 of 12 (COMPLETE)
 - B48: added /api/screenshot endpoint with 5 MB base64 cap; /api/screenshot was missing
 - Rust: MutexGuard scoped to block to avoid hold-across-await Send violation in kill_bun_server
 - Regression tests for old fail-open/specific-error behavior updated to match new B63/B73 security posture
+- B52: planning-state WS topic scoped per windowId using TOPIC_PREFIX + windowId; backward compat via 'default' fallback
 
 ## Pending Todos
 
@@ -49,6 +50,6 @@ None — Phase 20.2.5 complete. Rust compiles (cargo check passes). All security
 
 ## Session Continuity
 
-Last session: 2026-03-24T14:19:21.276Z
-Stopped at: Completed 20.2.5-12-PLAN.md — Phase 20.2.5 security-behaviour-closure COMPLETE
+Last session: 2026-03-24T16:23:02Z
+Stopped at: Completed 20.2.5-13-PLAN.md — B52 WS session isolation closed
 Resume file: None
