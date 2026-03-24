@@ -9,6 +9,30 @@
 import { join } from "node:path";
 import { spawn as nodeSpawn } from "node:child_process";
 
+/**
+ * Validates a single path segment (e.g., sliceId, milestoneId, taskId).
+ * Rejects traversal sequences, path separators, and null bytes.
+ * Returns the segment unchanged if valid.
+ */
+function validateSegment(segment: string, label: string): string {
+  if (!segment || typeof segment !== "string") {
+    throw new Error("Invalid path segment");
+  }
+  // Reject null bytes
+  if (segment.includes("\x00")) {
+    throw new Error("Invalid path segment");
+  }
+  // Reject traversal sequences
+  if (segment.includes("..")) {
+    throw new Error("Invalid path segment");
+  }
+  // Reject path separators (prevents multi-segment injection)
+  if (segment.includes("/") || segment.includes("\\")) {
+    throw new Error("Invalid path segment");
+  }
+  return segment;
+}
+
 const VALID_TYPES = ["plan", "task", "diff", "uat_results"] as const;
 type GsdFileType = (typeof VALID_TYPES)[number];
 
@@ -126,7 +150,21 @@ export async function handleGsdFileRequest(
     return Response.json({ error: "sliceId query param is required" }, { status: 400 });
   }
 
+  try {
+    validateSegment(sliceId, "sliceId");
+  } catch {
+    return Response.json({ error: "Invalid request parameters" }, { status: 400 });
+  }
+
   const milestoneId = url.searchParams.get("milestoneId") ?? "";
+
+  if (milestoneId) {
+    try {
+      validateSegment(milestoneId, "milestoneId");
+    } catch {
+      return Response.json({ error: "Invalid request parameters" }, { status: 400 });
+    }
+  }
 
   const typeParam = url.searchParams.get("type");
   if (!typeParam || !(VALID_TYPES as readonly string[]).includes(typeParam)) {
@@ -151,10 +189,18 @@ export async function handleGsdFileRequest(
       break;
     }
     case "task": {
+      const rawTaskId = url.searchParams.get("taskId") ?? undefined;
+      if (rawTaskId) {
+        try {
+          validateSegment(rawTaskId, "taskId");
+        } catch {
+          return Response.json({ error: "Invalid request parameters" }, { status: 400 });
+        }
+      }
       const taskId = await resolveTaskId(
         gsdDir,
         sliceId,
-        url.searchParams.get("taskId") ?? undefined,
+        rawTaskId,
         milestoneId || undefined
       );
       const rootPath = join(gsdDir, `${taskId}-SUMMARY.md`);
