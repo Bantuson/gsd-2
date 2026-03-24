@@ -55,6 +55,40 @@ const sessions = new Map<string, AuthSession>();
 const providerSessions = new Map<string, string>();
 
 // ---------------------------------------------------------------------------
+// T-AUTH-02 B64: Token refresh mutex — prevents concurrent refresh for the
+// same credential (race condition that can double-use refresh tokens).
+// ---------------------------------------------------------------------------
+
+const refreshLocks = new Map<string, Promise<void>>();
+
+/**
+ * Serializes token refresh operations per credential key.
+ * If a refresh is already in progress for the given key, the caller waits
+ * for it to complete before proceeding — preventing double-use of tokens.
+ * B64: mutex prevents concurrent token refresh per credential.
+ */
+export async function withRefreshLock<T>(credentialKey: string, fn: () => Promise<T>): Promise<T> {
+  // Wait for any existing refresh to complete first
+  const existing = refreshLocks.get(credentialKey);
+  if (existing) {
+    await existing;
+    // After the existing refresh completes the new token should be available.
+    // The caller is responsible for re-reading the token after this returns.
+  }
+
+  let resolve!: () => void;
+  const lock = new Promise<void>(r => { resolve = r; });
+  refreshLocks.set(credentialKey, lock);
+
+  try {
+    return await fn();
+  } finally {
+    resolve();
+    refreshLocks.delete(credentialKey);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Session helpers
 // ---------------------------------------------------------------------------
 

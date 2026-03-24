@@ -183,3 +183,55 @@ describe("T-AUTH-01 — Authentication Enforcement", () => {
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// T-AUTH-02 — Token Refresh Serialization (B64)
+// ---------------------------------------------------------------------------
+
+describe("T-AUTH-02 — Token Refresh Serialization", () => {
+  it("B64: withRefreshLock serializes concurrent token refresh for the same credential", async () => {
+    // Import the mutex helper exported from auth-api.ts
+    const { withRefreshLock } = await import("../src/server/auth-api");
+
+    const key = "test-credential";
+    const order: number[] = [];
+
+    // Simulate two concurrent refresh calls
+    // First call takes 50ms, second call arrives while first is running
+    const first = withRefreshLock(key, async () => {
+      await new Promise<void>(r => setTimeout(r, 50));
+      order.push(1);
+      return "token-1";
+    });
+
+    const second = withRefreshLock(key, async () => {
+      order.push(2);
+      return "token-2";
+    });
+
+    const [result1, result2] = await Promise.all([first, second]);
+
+    // Both calls must complete and return their own values
+    expect(result1).toBe("token-1");
+    expect(result2).toBe("token-2");
+
+    // The second refresh must not START until after the first completes
+    // order = [1, 2] proves serialization (second ran after first)
+    expect(order).toEqual([1, 2]);
+  });
+
+  it("B64: withRefreshLock releases the lock even when the refresh function throws", async () => {
+    const { withRefreshLock } = await import("../src/server/auth-api");
+
+    const key = "error-credential";
+
+    // First call throws
+    await expect(withRefreshLock(key, async () => {
+      throw new Error("refresh failed");
+    })).rejects.toThrow("refresh failed");
+
+    // Second call must NOT be blocked (lock was released by finally block)
+    const result = await withRefreshLock(key, async () => "recovered-token");
+    expect(result).toBe("recovered-token");
+  });
+});
