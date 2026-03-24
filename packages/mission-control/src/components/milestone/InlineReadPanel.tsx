@@ -4,8 +4,7 @@
  */
 import { X } from "lucide-react";
 import { marked } from "marked";
-import DOMPurify from "dompurify";
-// sanitizeHtml provides a pre-configured DOMPurify wrapper (B25, B65)
+// sanitizeHtml: hardened wrapper with allowlist (B25, B65)
 import { sanitizeHtml } from "../../lib/sanitize-html";
 
 interface InlineReadPanelProps {
@@ -19,7 +18,7 @@ interface InlineReadPanelProps {
 export function InlineReadPanel({ isOpen, title, content, isLoading, onClose }: InlineReadPanelProps) {
   if (!isOpen) return null;
 
-  const html = DOMPurify.sanitize(marked(content, { async: false }) as string);
+  const html = sanitizeHtml(marked(content, { async: false }) as string);
 
   return (
     <div
