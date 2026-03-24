@@ -40,7 +40,7 @@ export interface WsServerOptions {
 }
 
 export interface WsServer {
-  broadcast(diff: StateDiff): void;
+  broadcast(diff: StateDiff, windowId?: string): void;
   /** Send a chat response to a specific client. */
   sendToClient(ws: ServerWebSocket, data: unknown): void;
   /** Broadcast chat event to all clients subscribed to "chat" topic. */
@@ -53,7 +53,7 @@ export interface WsServer {
   readonly hostname: string;
 }
 
-const TOPIC = "planning-state";
+const TOPIC_PREFIX = "planning-state:";
 const CHAT_TOPIC = "chat";
 
 /**
@@ -94,8 +94,8 @@ export function createWsServer(options: WsServerOptions): WsServer {
 
       // T-AUTH-01 B51: Validate per-launch token on WebSocket upgrade.
       // Token must be supplied as ?token=<value> or Authorization: Bearer <value>.
+      const url = new URL(req.url);
       if (launchToken) {
-        const url = new URL(req.url);
         const wsToken = url.searchParams.get("token") ??
           req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
         if (wsToken !== launchToken) {
@@ -106,13 +106,18 @@ export function createWsServer(options: WsServerOptions): WsServer {
         }
       }
 
-      const upgraded = server.upgrade(req);
+      // T-AUTH-01 B52: Extract windowId for per-window topic scoping.
+      // Clients connect via ws://host:port?windowId=<id>&token=<token>
+      const windowId = url.searchParams.get("windowId") || "default";
+
+      const upgraded = server.upgrade(req, { data: { windowId } });
       if (upgraded) return undefined;
       return new Response("Mission Control WebSocket Server", { status: 200 });
     },
     websocket: {
       open(ws: ServerWebSocket) {
-        ws.subscribe(TOPIC);
+        const wsWindowId = (ws as unknown as { data?: { windowId?: string } }).data?.windowId || "default";
+        ws.subscribe(TOPIC_PREFIX + wsWindowId);
         ws.subscribe(CHAT_TOPIC);
         sequence++;
         const state = getFullState();
@@ -175,17 +180,18 @@ export function createWsServer(options: WsServerOptions): WsServer {
         }
       },
       close(ws: ServerWebSocket) {
-        ws.unsubscribe(TOPIC);
+        const wsWindowId = (ws as unknown as { data?: { windowId?: string } }).data?.windowId || "default";
+        ws.unsubscribe(TOPIC_PREFIX + wsWindowId);
         ws.unsubscribe(CHAT_TOPIC);
       },
     },
   });
 
   return {
-    broadcast(diff: StateDiff): void {
+    broadcast(diff: StateDiff, windowId?: string): void {
       sequence++;
       diff.sequence = sequence;
-      server.publish(TOPIC, JSON.stringify(diff));
+      server.publish(TOPIC_PREFIX + (windowId || "default"), JSON.stringify(diff));
     },
     sendToClient(ws: ServerWebSocket, data: unknown): void {
       const payload = JSON.stringify(data);
