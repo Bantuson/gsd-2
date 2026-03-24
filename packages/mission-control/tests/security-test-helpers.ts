@@ -1,28 +1,32 @@
 /**
- * Shared security test helpers for holistic behaviour testing.
- * Imported by all 6 security test files (tfile, texec, tnet, tauth, txss, tcred).
+ * Shared security test helpers for all 6 Nyquist security test files.
  *
- * Does NOT import anything from src/ — only node:* and bun:* APIs.
+ * Provides:
+ * - startTestServer(): spawns the real Bun server on a random port
+ * - makeRequest(): HTTP client with Host header injection
+ * - assertNoPathLeakInBody(): checks response bodies for absolute paths
+ * - traversalPayloads(): common path-traversal attack strings
+ * - makeMultipartBody(): FormData builder for file upload tests
  *
- * [Rule 3 - Blocking] Created by 20.2.5-02 execution because plan-01 (which creates this
- * file) runs in parallel. This is a minimal bootstrap required for plan-02 tests.
+ * NOTE: This module only imports from node:* and bun:* APIs — no src/ imports.
  */
 
 import { resolve } from "node:path";
+import { expect } from "bun:test";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface TestServer {
-  /** Full base URL, e.g. http://127.0.0.1:49123 */
   baseUrl: string;
-  /** Port the server is bound to */
   port: number;
-  /** Stop the server and clean up the child process */
+  /** Per-launch auth token retrieved from /api/auth/startup-token on server start. */
+  token: string;
   stop: () => Promise<void>;
 }
 
+// Mission-control package root (tests/ -> packages/mission-control/)
 const MC_ROOT = resolve(import.meta.dir, "..");
 
 // ---------------------------------------------------------------------------
@@ -30,36 +34,47 @@ const MC_ROOT = resolve(import.meta.dir, "..");
 // ---------------------------------------------------------------------------
 
 /**
- * Spawns the Mission Control Bun HTTP server on a random available port.
- * Polls until the server responds or 25 seconds elapse (matches server.test.ts pattern).
- * Returns a TestServer handle with a stop() method.
+ * Spawn the real Bun HTTP server on a random available port.
+ * Uses bind-to-0 trick to find a free port, then releases it and starts
+ * the server there.
+ *
+ * Returns { baseUrl, port, stop() }.
  */
-export async function startTestServer(env?: Record<string, string>): Promise<TestServer> {
-  // Find a random available port using a probe listener
-  const port = await getRandomPort();
+export async function startTestServer(
+  env?: Record<string, string>
+): Promise<TestServer> {
+  // Find a free port atomically using Bun.listen(0)
+  const port = await findFreePort();
 
-  // Use Bun.spawn with cwd (matches the working pattern in server.test.ts)
-  const proc = Bun.spawn(["bun", "run", "src/server.ts"], {
+  const childEnv: Record<string, string> = {
+    ...process.env,
+    MC_PORT: String(port),
+    MC_NO_HMR: "1",
+    ...env,
+  };
+
+  // Use Bun.spawn with the resolved bun binary path.
+  // Bun.which() avoids PATH resolution issues on Windows where "bun" may not be
+  // in the subprocess's PATH (Bun.spawn resolves against the OS PATH, not shell PATH).
+  // This matches the pattern in server.test.ts and correctly resolves workspace
+  // packages via the root node_modules (workspace packages like @gsd/pi-coding-agent
+  // expose TypeScript source via "bun" export condition).
+  const bunBin = Bun.which("bun") ?? "bun";
+  const child = Bun.spawn([bunBin, "run", "src/server.ts"], {
     cwd: MC_ROOT,
-    env: {
-      ...process.env,
-      MC_PORT: String(port),
-      MC_NO_HMR: "1",
-      NODE_ENV: "test",
-      ...env,
-    },
+    env: childEnv,
     stdout: "pipe",
     stderr: "pipe",
   });
 
   const baseUrl = `http://127.0.0.1:${port}`;
 
-  // Poll until the server is up (max 25 seconds, matching server.test.ts)
+  // Poll until the server responds or 10 seconds elapse
   let ready = false;
   for (let i = 0; i < 100; i++) {
     try {
-      const res = await fetch(baseUrl + "/", {
-        signal: AbortSignal.timeout(500),
+      const res = await fetch(`${baseUrl}/`, {
+        signal: AbortSignal.timeout(300),
       });
       if (res.status < 600) {
         ready = true;
@@ -68,25 +83,80 @@ export async function startTestServer(env?: Record<string, string>): Promise<Tes
     } catch {
       // Server not ready yet
     }
-    await Bun.sleep(250);
+    await Bun.sleep(100);
   }
 
-  if (!ready) {
-    proc.kill();
-    const stderr = await new Response(proc.stderr).text().catch(() => "");
-    throw new Error(`Test server on port ${port} did not start within 25 seconds. stderr: ${stderr.slice(0, 500)}`);
+  if (!ready || child.exitCode !== null) {
+    const stderr = child.stderr
+      ? await new Response(child.stderr).text().catch(() => "")
+      : "";
+    child.kill();
+    throw new Error(
+      `Test server failed to start on port ${port}. exitCode=${child.exitCode}. stderr: ${stderr.slice(0, 500)}`
+    );
   }
 
-  return {
-    baseUrl,
-    port,
-    stop: () =>
-      new Promise<void>((resolve) => {
-        proc.kill();
-        // Give process time to terminate
-        setTimeout(resolve, 500);
-      }),
+  const stop = (): Promise<void> => {
+    return new Promise((resolve) => {
+      child.kill();
+      // Give it a moment to shut down
+      setTimeout(resolve, 500);
+    });
   };
+
+  // T-AUTH-01: Retrieve the per-launch token from the startup endpoint.
+  // The server only serves this once; tests use it for all /api/* requests.
+  const token = await getTestToken(baseUrl);
+
+  return { baseUrl, port, token, stop };
+}
+
+/**
+ * Retrieve the per-launch bearer token from the test server.
+ * The /api/auth/startup-token endpoint is single-use — call once per server instance.
+ * startTestServer() calls this automatically; use it directly only if you need the token
+ * before startTestServer returns (e.g., from a custom server fixture).
+ */
+export async function getTestToken(baseUrl: string): Promise<string> {
+  const urlObj = new URL(baseUrl);
+  const host = `127.0.0.1:${urlObj.port}`;
+  const res = await fetch(`${baseUrl}/api/auth/startup-token`, {
+    headers: { Host: host },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to retrieve launch token: ${res.status}`);
+  }
+  const body = await res.json() as { token?: string };
+  if (!body.token) {
+    throw new Error("Launch token response missing 'token' field");
+  }
+  return body.token;
+}
+
+/**
+ * Find a free TCP port by binding to port 0 and reading the assigned port.
+ */
+async function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    // Use Bun.listen to grab a free port atomically
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const server = (Bun as any).listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: {
+        data() {},
+        open() {},
+        close() {},
+      },
+    });
+    const port: number = server.port;
+    server.stop(true);
+    if (!port) {
+      reject(new Error("Could not obtain a free port"));
+    } else {
+      resolve(port);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -94,26 +164,39 @@ export async function startTestServer(env?: Record<string, string>): Promise<Tes
 // ---------------------------------------------------------------------------
 
 /**
- * Thin fetch wrapper that prepends baseUrl and adds the correct Host header
- * so that server.ts Host-header validation (B37) passes automatically.
- * Does NOT follow redirects.
+ * Send an HTTP request to the test server.
+ * Automatically injects a valid `Host` header so the server's
+ * DNS-rebinding check (T-NET-01 B37) passes.
+ *
+ * Pass `token` to include Authorization: Bearer <token> on the request.
+ * Required for all /api/* endpoints after T-AUTH-01 remediation (B50).
  */
 export async function makeRequest(
   baseUrl: string,
   path: string,
-  options: RequestInit = {}
+  options: RequestInit & { token?: string } = {}
 ): Promise<Response> {
-  const url = new URL(path, baseUrl);
-  const port = url.port || (url.protocol === "https:" ? "443" : "80");
-  const headers = new Headers(options.headers ?? {});
+  const url = `${baseUrl}${path}`;
+
+  // Extract port from baseUrl for Host header
+  const urlObj = new URL(baseUrl);
+  const host = `127.0.0.1:${urlObj.port}`;
+
+  const { token, ...fetchOptions } = options;
+  const headers = new Headers(fetchOptions.headers);
   if (!headers.has("Host")) {
-    headers.set("Host", `127.0.0.1:${port}`);
+    headers.set("Host", host);
   }
-  if (!headers.has("Content-Type") && options.body && typeof options.body === "string") {
+  if (!headers.has("Content-Type") && fetchOptions.body && typeof fetchOptions.body === "string") {
     headers.set("Content-Type", "application/json");
   }
-  return fetch(url.toString(), {
-    ...options,
+  // T-AUTH-01 B50: Inject bearer token if provided
+  if (token && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  return fetch(url, {
+    ...fetchOptions,
     headers,
     redirect: "manual",
   });
@@ -124,22 +207,16 @@ export async function makeRequest(
 // ---------------------------------------------------------------------------
 
 /**
- * Asserts the response body string does NOT contain absolute filesystem paths.
- * Prevents path disclosure via error messages or response bodies.
+ * Assert that a response body does not contain absolute filesystem paths.
+ * Catches ENOENT/EPERM errors that include the actual file path.
  */
 export function assertNoPathLeakInBody(body: string, label: string): void {
-  const patterns = [
-    /\/home\//,
-    /\/Users\//,
-    /\/tmp\//,
-    /C:\\Users\\/,
-    /C:\/Users\//,
-  ];
-  for (const pattern of patterns) {
-    if (pattern.test(body)) {
-      throw new Error(`assertNoPathLeakInBody [${label}]: body contains filesystem path matching ${pattern}: ${body.slice(0, 200)}`);
-    }
-  }
+  expect(body, `${label}: must not contain /home/ path`).not.toMatch(/\/home\//);
+  expect(body, `${label}: must not contain /Users/ path`).not.toMatch(/\/Users\//);
+  expect(body, `${label}: must not contain /tmp/ path`).not.toMatch(/\/tmp\//);
+  expect(body, `${label}: must not contain /etc/ path`).not.toMatch(/\/etc\//);
+  expect(body, `${label}: must not contain C:\\Users\\ path`).not.toMatch(/C:\\Users\\/);
+  expect(body, `${label}: must not contain C:/Users/ path`).not.toMatch(/C:\/Users\//);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +224,7 @@ export function assertNoPathLeakInBody(body: string, label: string): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Standard path traversal payloads for testing input validation.
+ * Returns a standard set of path-traversal attack strings.
  */
 export function traversalPayloads(): string[] {
   return [
@@ -165,8 +242,9 @@ export function traversalPayloads(): string[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Creates a FormData with a file field using the given filename and content.
- * Used for testing assets-api upload with traversal filenames.
+ * Create a FormData with a single file field.
+ * The filename is taken from `filename` param — use traversal strings here to
+ * test path sanitization on file upload handlers.
  */
 export function makeMultipartBody(
   filename: string,
@@ -176,20 +254,4 @@ export function makeMultipartBody(
   const blob = new Blob([content], { type: "text/plain" });
   formData.append("file", blob, filename);
   return formData;
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-async function getRandomPort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const net = require("node:net");
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as { port: number }).port;
-      server.close(() => resolve(port));
-    });
-    server.on("error", reject);
-  });
 }
