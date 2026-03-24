@@ -119,7 +119,10 @@ pub async fn spawn_bun_server(app: AppHandle) {
         Ok(child) => {
             // Store handle in managed state
             if let Some(state) = app.try_state::<BunState>() {
-                let mut guard = state.child.lock().unwrap();
+                let mut guard = state.child.lock().unwrap_or_else(|e| {
+                    eprintln!("[bun_manager] WARNING: mutex poisoned, recovering: {e}");
+                    e.into_inner()
+                });
                 *guard = Some(child);
             }
             // Notify frontend
@@ -144,7 +147,10 @@ async fn watch_bun_process(app: AppHandle) {
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
         if let Some(state) = app.try_state::<BunState>() {
-            let mut guard = state.child.lock().unwrap();
+            let mut guard = state.child.lock().unwrap_or_else(|e| {
+                eprintln!("[bun_manager] WARNING: mutex poisoned, recovering: {e}");
+                e.into_inner()
+            });
             if let Some(child) = guard.as_mut() {
                 match child.try_wait() {
                     Ok(Some(status)) => {
@@ -169,14 +175,20 @@ async fn watch_bun_process(app: AppHandle) {
 /// Kill the Bun server cleanly. Called on window close.
 pub async fn kill_bun_server(app: AppHandle) {
     if let Some(state) = app.try_state::<BunState>() {
-        let mut guard = state.child.lock().unwrap();
-        if let Some(child) = guard.as_mut() {
+        let mut guard = state.child.lock().unwrap_or_else(|e| {
+            eprintln!("[bun_manager] WARNING: mutex poisoned, recovering: {e}");
+            e.into_inner()
+        });
+        if let Some(mut child) = guard.take() {
             // Send SIGTERM (or TerminateProcess on Windows)
             let _ = child.kill();
-            let _ = child.wait();
+            // B46/B79: move blocking wait to thread pool — do not block Tokio executor
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = child.wait();
+            })
+            .await;
             eprintln!("[bun_manager] Bun server killed cleanly.");
         }
-        *guard = None;
     }
 }
 
@@ -186,4 +198,29 @@ pub async fn restart_bun(app: AppHandle) {
     // Brief delay to let the port free
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     spawn_bun_server(app).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn test_poisoned_mutex_does_not_panic() {
+        // Create a mutex and poison it by panicking inside a lock scope
+        let mutex = Arc::new(Mutex::new(42u32));
+        let mutex_clone = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _guard = mutex_clone.lock().unwrap();
+            panic!("intentional panic to poison the mutex");
+        })
+        .join();
+
+        // The mutex should now be poisoned
+        assert!(mutex.is_poisoned());
+
+        // Calling our recovery pattern should NOT panic:
+        let value = mutex.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(*value, 42);
+        // Success: no panic
+    }
 }
