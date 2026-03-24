@@ -108,7 +108,76 @@ describe("T-AUTH-01 — Authentication Enforcement", () => {
     });
   });
 
-  it.todo("B52: Session isolation — requires two authenticated WS connections; verify after Wave 4 token auth is implemented");
+  it("B52: Session isolation — two WS clients with different windowIds do not receive each other's planning-state messages", async () => {
+    // Create a standalone WS server on a random port (no launchToken so both clients can connect)
+    const { createWsServer } = await import("../src/server/ws-server");
+    const wsPort = 14300 + Math.floor(Math.random() * 100);
+
+    const wsServer = createWsServer({
+      port: wsPort,
+      getFullState: () => ({
+        tasks: [],
+        projectName: "test",
+        activeSessions: [],
+        currentPhase: null,
+        completedPhases: [],
+        recentActivity: [],
+      } as unknown as import("../src/server/types").PlanningState),
+    });
+
+    const messagesA: string[] = [];
+    const messagesB: string[] = [];
+
+    const wsA = new WebSocket(`ws://127.0.0.1:${wsPort}?windowId=window-A`);
+    const wsB = new WebSocket(`ws://127.0.0.1:${wsPort}?windowId=window-B`);
+
+    wsA.onmessage = (e) => messagesA.push(typeof e.data === "string" ? e.data : String(e.data));
+    wsB.onmessage = (e) => messagesB.push(typeof e.data === "string" ? e.data : String(e.data));
+
+    try {
+      // Wait for both clients to connect and receive their initial "full" state message
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("B52: timeout waiting for both clients to connect")), 5000);
+        let aReady = false;
+        let bReady = false;
+        const checkReady = () => { if (aReady && bReady) { clearTimeout(timer); resolve(); } };
+        const origOnMessageA = wsA.onmessage!;
+        const origOnMessageB = wsB.onmessage!;
+        wsA.onmessage = (e) => {
+          origOnMessageA.call(wsA, e);
+          const parsed = JSON.parse(typeof e.data === "string" ? e.data : String(e.data));
+          if (parsed.type === "full") { aReady = true; checkReady(); }
+        };
+        wsB.onmessage = (e) => {
+          origOnMessageB.call(wsB, e);
+          const parsed = JSON.parse(typeof e.data === "string" ? e.data : String(e.data));
+          if (parsed.type === "full") { bReady = true; checkReady(); }
+        };
+        wsA.onerror = (e) => { clearTimeout(timer); reject(new Error(`B52: wsA error: ${e}`)); };
+        wsB.onerror = (e) => { clearTimeout(timer); reject(new Error(`B52: wsB error: ${e}`)); };
+      });
+
+      // Broadcast only to window-A's topic
+      wsServer.broadcast({ type: "diff", changes: { test: "for-A" } } as unknown as import("../src/server/types").StateDiff, "window-A");
+
+      // Wait 500ms for message delivery
+      await new Promise<void>((r) => setTimeout(r, 500));
+
+      // Client A should have received: 1 initial "full" + 1 broadcast diff = 2 messages
+      expect(messagesA.length, "B52: window-A should receive 2 messages (initial full + broadcast)").toBe(2);
+
+      // Client B should have received only: 1 initial "full" = 1 message (NOT the window-A broadcast)
+      expect(messagesB.length, "B52: window-B must NOT receive window-A's broadcast").toBe(1);
+
+      // Verify Client A's second message contains the broadcast payload
+      const broadcastMsg = JSON.parse(messagesA[1]);
+      expect(broadcastMsg.changes?.test, "B52: window-A broadcast payload must be 'for-A'").toBe("for-A");
+    } finally {
+      wsA.close();
+      wsB.close();
+      wsServer.stop();
+    }
+  }, { timeout: 10_000 });
 
   it("B53: crypto.randomUUID() is used for auth session IDs (not Math.random)", async () => {
     // B53 GREEN — auth-api.ts already uses crypto.randomUUID() for session IDs (B53 confirmed PASS).
