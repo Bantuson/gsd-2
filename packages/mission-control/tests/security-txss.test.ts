@@ -13,7 +13,7 @@
 import { describe, it, expect } from "bun:test";
 import DOMPurify from "dompurify";
 import { JSDOM } from "jsdom";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 // Set up a DOMPurify instance backed by jsdom
@@ -156,35 +156,37 @@ describe("T-XSS-01 — Content Security", () => {
 
   it("B70: file:// URLs are constructed via URL parser, not template literal concatenation", () => {
     // commands.rs must not build file:// URLs via string concat
-    const commandsSrc = readFileSync(
-      resolve(import.meta.dir, "../src-tauri/src/commands.rs"),
-      "utf8"
-    );
+    const commandsPath = resolve(import.meta.dir, "../src-tauri/src/commands.rs");
+    expect(existsSync(commandsPath)).toBe(true, "B70: commands.rs must exist");
+    const commandsSrc = readFileSync(commandsPath, "utf8");
     expect(commandsSrc).not.toMatch(/format!\s*\(\s*"file:\/\/\{\}"/);
 
-    // Frontend window-identity.ts must not build file:// URLs via string concat
-    try {
-      const windowIdentitySrc = readFileSync(
-        resolve(import.meta.dir, "../src/lib/window-identity.ts"),
-        "utf8"
-      );
-      expect(windowIdentitySrc).not.toMatch(
+    // Frontend window-identity.ts must not build file:// URLs via string concat.
+    // Check both candidate paths; fail with a meaningful message if neither exists.
+    const libPath = resolve(import.meta.dir, "../src/lib/window-identity.ts");
+    const rootPath = resolve(import.meta.dir, "../src/window-identity.ts");
+
+    const libExists = existsSync(libPath);
+    const rootExists = existsSync(rootPath);
+
+    // At least one of the two candidate files must exist for this check to be meaningful
+    expect(libExists || rootExists).toBe(
+      true,
+      "B70: window-identity.ts not found at src/lib/window-identity.ts or src/window-identity.ts — add the correct path"
+    );
+
+    if (libExists) {
+      const src = readFileSync(libPath, "utf8");
+      expect(src).not.toMatch(
         /`file:\/\/\$\{|"file:\/\/" \+|'file:\/\/' \+/
       );
-    } catch {
-      // File may not exist — check the src/ root level instead
     }
 
-    try {
-      const windowIdentitySrc = readFileSync(
-        resolve(import.meta.dir, "../src/window-identity.ts"),
-        "utf8"
-      );
-      expect(windowIdentitySrc).not.toMatch(
+    if (rootExists) {
+      const src = readFileSync(rootPath, "utf8");
+      expect(src).not.toMatch(
         /`file:\/\/\$\{|"file:\/\/" \+|'file:\/\/' \+/
       );
-    } catch {
-      // File may not exist — skip
     }
   });
 });
