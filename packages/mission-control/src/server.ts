@@ -145,7 +145,10 @@ const server = Bun.serve({
 
     // T-NET-02 B44: Rate limiting — 100 requests per second per IP.
     // Applied to all requests to prevent resource exhaustion.
-    const clientIp = req.headers.get("x-real-ip") ?? "127.0.0.1";
+    // NOTE: X-Real-IP header is intentionally NOT used — any local process could inject it
+    // to bypass per-IP rate limiting. Since this server binds exclusively to 127.0.0.1,
+    // all requests originate from localhost. Use the constant address directly.
+    const clientIp = "127.0.0.1";
     if (!checkRateLimit(clientIp)) {
       return new Response(JSON.stringify({ error: "Too many requests" }), {
         status: 429,
