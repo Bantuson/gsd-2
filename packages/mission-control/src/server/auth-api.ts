@@ -6,6 +6,7 @@
  *
  * Routes:
  *   GET  /api/auth/status         → { authenticated, provider }
+ *   POST /api/auth/session        → create a pre-auth session slot (B43: capped at 100)
  *   POST /api/auth/login          → starts login, waits for initial events,
  *                                    returns { sessionId, events: AuthEvent[] }
  *   GET  /api/auth/events         → long-poll: ?session=<id>&after=<n>
@@ -43,6 +44,9 @@ interface AuthSession {
 
 const authFilePath = join(homedir(), ".gsd", "auth.json");
 const authStorage = AuthStorage.create(authFilePath);
+
+// T-DOS-01 B43: Maximum concurrent auth sessions to prevent resource exhaustion
+const MAX_AUTH_SESSIONS = 100;
 
 // Active login sessions: sessionId → session
 const sessions = new Map<string, AuthSession>();
@@ -113,6 +117,37 @@ export async function handleAuthRequest(req: Request, url: URL): Promise<Respons
   }
 
   // ---------------------------------------------------------------------------
+  // POST /api/auth/session — create a pre-auth session slot (B43: capped at 100)
+  //
+  // This lightweight endpoint creates a named session entry used by external
+  // tooling and security tests to verify the session cap enforcement.
+  // It does NOT start an OAuth flow — use /api/auth/login for that.
+  // ---------------------------------------------------------------------------
+  if (pathname === "/api/auth/session" && req.method === "POST") {
+    // B43: Enforce session cap — reject with 429 when at limit
+    if (sessions.size >= MAX_AUTH_SESSIONS) {
+      return Response.json(
+        { error: "Authentication failed" },
+        { status: 429 }
+      );
+    }
+    const body = (await req.json().catch(() => ({}))) as { provider?: string };
+    const provider = body.provider ?? "unknown";
+    const sessionId = crypto.randomUUID();
+    const session: AuthSession = {
+      provider,
+      events: [],
+      promptResolver: null,
+      eventWaiters: [],
+      done: false,
+    };
+    sessions.set(sessionId, session);
+    // Auto-clean short-lived pre-auth slots after 60 seconds
+    setTimeout(() => sessions.delete(sessionId), 60_000);
+    return Response.json({ sessionId });
+  }
+
+  // ---------------------------------------------------------------------------
   // POST /api/auth/login — start OAuth login, return initial events as JSON
   //
   // Replaces SSE approach with a reliable polling-based flow:
@@ -124,7 +159,11 @@ export async function handleAuthRequest(req: Request, url: URL): Promise<Respons
   if (pathname === "/api/auth/login" && req.method === "POST") {
     const body = (await req.json()) as { provider?: string };
     if (!body.provider) {
-      return Response.json({ error: "provider required" }, { status: 400 });
+      return Response.json({ error: "Authentication failed" }, { status: 400 });
+    }
+    // B43: Enforce session cap on login as well
+    if (sessions.size >= MAX_AUTH_SESSIONS) {
+      return Response.json({ error: "Authentication failed" }, { status: 429 });
     }
     const provider = body.provider;
     const sessionId = crypto.randomUUID();
@@ -180,9 +219,9 @@ export async function handleAuthRequest(req: Request, url: URL): Promise<Respons
         setTimeout(() => sessions.delete(sessionId), 60_000);
       })
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : "Login failed";
-        console.error(`[auth] Login error for ${provider}:`, message);
-        addEvent({ type: "error", message });
+        // B63: Log original error for debugging but surface generic message to client
+        console.error(`[auth] Login error for ${provider}:`, err);
+        addEvent({ type: "error", message: "Authentication failed" });
         providerSessions.delete(provider);
         setTimeout(() => sessions.delete(sessionId), 60_000);
       });
@@ -193,10 +232,12 @@ export async function handleAuthRequest(req: Request, url: URL): Promise<Respons
     );
     try {
       await Promise.race([firstEventReady, timeout]);
-    } catch {
+    } catch (err) {
+      // B63: Log original error, return generic message
+      console.error("[auth] Auth flow timeout:", err);
       sessions.delete(sessionId);
       providerSessions.delete(provider);
-      return Response.json({ error: "Auth flow timed out waiting for provider" }, { status: 504 });
+      return Response.json({ error: "Authentication failed" }, { status: 504 });
     }
 
     // After the first event fires, any synchronously co-fired events

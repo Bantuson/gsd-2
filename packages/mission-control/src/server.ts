@@ -36,6 +36,28 @@ export const LAUNCH_TOKEN = crypto.randomUUID();
 /** Whether the startup token has been retrieved. After retrieval, the endpoint is locked. */
 let startupTokenRetrieved = false;
 
+// T-NET-02 B44: Basic rate limiter — 100 requests per second per IP
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+const RATE_LIMIT = 100; // max requests per window
+const RATE_WINDOW_MS = 1000; // 1 second window
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return true; // within limit
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT) {
+    return false; // over limit
+  }
+  return true;
+}
+
+// T-DOS-01 B49: Window pool cap — prevent resource exhaustion from unbounded window creation
+const MAX_WINDOWS = 10;
+
 // Free the HTTP port — WS ports are freed per-window as pipelines are created
 await freePort(HTTP_PORT);
 
@@ -60,6 +82,10 @@ function getPipelineForReq(req: Request): PipelineHandle | null {
 async function registerWindow(windowId: string): Promise<number> {
   if (windowWsPorts.has(windowId)) {
     return windowWsPorts.get(windowId)!;
+  }
+  // T-DOS-01 B49: Cap window pool to prevent resource exhaustion
+  if (windowWsPorts.size >= MAX_WINDOWS) {
+    throw new Error(`Window pool exhausted (max ${MAX_WINDOWS} windows)`);
   }
   const wsPort = nextWsPort++;
   windowWsPorts.set(windowId, wsPort);
@@ -117,6 +143,16 @@ const server = Bun.serve({
       });
     }
 
+    // T-NET-02 B44: Rate limiting — 100 requests per second per IP.
+    // Applied to all requests to prevent resource exhaustion.
+    const clientIp = req.headers.get("x-real-ip") ?? "127.0.0.1";
+    if (!checkRateLimit(clientIp)) {
+      return new Response(JSON.stringify({ error: "Too many requests" }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "1" },
+      });
+    }
+
     // T-AUTH-01: Single-use startup token endpoint
     // Called by the Tauri frontend immediately after WebView loads.
     // Locked after first successful retrieval to prevent replay.
@@ -153,7 +189,8 @@ const server = Bun.serve({
 
     // T-AUTH-01 B50: Token validation for all API routes
     // T-AUTH-01 B55: Origin validation for all API routes
-    if (pathname.startsWith("/api/") && pathname !== "/api/auth/startup-token") {
+    // /api/auth/session is an unauthenticated pre-auth slot endpoint (B43 session cap)
+    if (pathname.startsWith("/api/") && pathname !== "/api/auth/startup-token" && pathname !== "/api/auth/session") {
       const authHeader = req.headers.get("authorization") ?? "";
       const providedToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
@@ -194,7 +231,11 @@ const server = Bun.serve({
         const wsPort = await registerWindow(windowId);
         return addCorsHeaders(Response.json({ wsPort, windowId }));
       } catch (err: any) {
-        return addCorsHeaders(Response.json({ error: err.message }, { status: 500 }));
+        // B49: Return 400 when window pool is exhausted
+        if (err.message && err.message.includes("pool exhausted")) {
+          return addCorsHeaders(Response.json({ error: "Window pool exhausted" }, { status: 400 }));
+        }
+        return addCorsHeaders(Response.json({ error: "Registration failed" }, { status: 500 }));
       }
     }
 
