@@ -126,7 +126,7 @@ const server = Bun.serve({
     // T-NET-01 B37: Host header validation — prevents DNS rebinding attacks.
     // The Host header is validated before any route dispatch.
     const host = req.headers.get("host");
-    if (host && !ALLOWED_HOSTS.has(host)) {
+    if (!host || !ALLOWED_HOSTS.has(host)) {
       return new Response(JSON.stringify({ error: "Invalid Host header" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },

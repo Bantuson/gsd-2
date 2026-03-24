@@ -20,7 +20,7 @@ async function getPidsOnPort(port: number): Promise<number[]> {
       for (const line of stdout.split(String.fromCharCode(10))) {
         if (line.includes(":" + portStr + " ") || line.includes(":" + portStr + String.fromCharCode(9))) {
           if (line.includes("LISTENING")) {
-            const parts = line.trim().split(/s+/);
+            const parts = line.trim().split(/\s+/);
             const pid = parseInt(parts[parts.length - 1], 10);
             if (pid && !isNaN(pid) && pid !== process.pid) pids.add(pid);
           }
