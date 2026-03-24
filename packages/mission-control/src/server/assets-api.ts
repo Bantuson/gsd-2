@@ -5,6 +5,7 @@
 
 import { readdir, stat, unlink, mkdir, access } from "node:fs/promises";
 import { join, extname, basename, resolve } from "node:path";
+import { validatePath } from "./fs-api";
 
 /** Allowed file extensions for upload */
 export const SUPPORTED_EXTENSIONS = new Set([
@@ -102,8 +103,21 @@ export async function handleAssetsRequest(
       return Response.json({ error: "No file field in form data" }, { status: 400 });
     }
 
+    // Apply basename to prevent path traversal in the filename
+    const safeName = basename(file.name);
+
+    // Reject empty basenames (e.g., filename was just a directory separator)
+    if (!safeName) {
+      return Response.json({ error: "Invalid filename" }, { status: 400 });
+    }
+
+    // Reject filenames containing traversal sequences (defense in depth after basename)
+    if (safeName.includes("..") || safeName.includes("/") || safeName.includes("\\") || safeName.includes("\x00")) {
+      return Response.json({ error: "Invalid filename" }, { status: 400 });
+    }
+
     // Validate extension
-    const ext = extname(file.name).slice(1).toLowerCase();
+    const ext = extname(safeName).slice(1).toLowerCase();
     if (!SUPPORTED_EXTENSIONS.has(ext)) {
       return Response.json(
         { error: `Unsupported file type: .${ext}. Allowed: ${[...SUPPORTED_EXTENSIONS].join(", ")}` },
@@ -122,16 +136,23 @@ export async function handleAssetsRequest(
     // Ensure assets directory exists
     await mkdir(dir, { recursive: true });
 
-    // Get unique filename
-    const finalName = await uniqueFilename(dir, file.name);
+    // Get unique filename (using basename-sanitized name)
+    const finalName = await uniqueFilename(dir, safeName);
     const filePath = join(dir, finalName);
+
+    // Containment check: ensure the resolved write path stays within the assets directory
+    try {
+      validatePath(filePath, dir);
+    } catch {
+      return Response.json({ error: "Invalid upload path" }, { status: 400 });
+    }
 
     // Read category from form data
     const category = (formData.get("category") as string | null)?.trim() || "Uncategorized";
 
-    // Write file
+    // Write file with restrictive permissions
     const buffer = await file.arrayBuffer();
-    await Bun.write(filePath, buffer);
+    await Bun.write(filePath, buffer, { mode: 0o600 });
 
     // Update assets meta with category
     const meta = await readAssetsMeta(planningDir);
@@ -254,7 +275,8 @@ export async function handleAssetsRequest(
       if (err.code === "ENOENT") {
         return Response.json({ error: "File not found" }, { status: 404 });
       }
-      return Response.json({ error: err.message }, { status: 500 });
+      console.error("[assets-api] delete error:", err);
+      return Response.json({ error: "File operation failed" }, { status: 500 });
     }
   }
 

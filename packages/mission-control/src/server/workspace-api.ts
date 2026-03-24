@@ -10,6 +10,25 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { saveSettings } from "./settings-api";
 
+/**
+ * Validates a project name to prevent path traversal attacks.
+ * Rejects names containing traversal sequences, separators, or null bytes.
+ */
+function validateProjectName(name: string): void {
+  if (!name || typeof name !== "string") {
+    throw new Error("Invalid project name");
+  }
+  if (name.includes("\x00")) {
+    throw new Error("Invalid project name");
+  }
+  if (name.includes("..")) {
+    throw new Error("Invalid project name");
+  }
+  if (name.includes("/") || name.includes("\\")) {
+    throw new Error("Invalid project name");
+  }
+}
+
 const execFileAsync = promisify(execFile);
 
 /** Override for testing — mirrors _setRecentFilePath pattern */
@@ -83,10 +102,8 @@ export async function handleWorkspaceRequest(
       await saveSettings("global", { workspace_path: body.path });
       return Response.json({ success: true });
     } catch (err: any) {
-      return Response.json(
-        { error: err.message || "Failed to save settings" },
-        { status: 500 }
-      );
+      console.error("[workspace-api] save error:", err);
+      return Response.json({ error: "Failed to save settings" }, { status: 500 });
     }
   }
 
@@ -104,14 +121,18 @@ export async function handleWorkspaceRequest(
     }
 
     try {
+      validateProjectName(body.name);
+    } catch {
+      return Response.json({ error: "Invalid request parameters" }, { status: 400 });
+    }
+
+    try {
       const wsPath = body.workspacePath ?? getWorkspacePath();
       const result = await createProject(body.name, wsPath);
       return Response.json(result);
     } catch (err: any) {
-      return Response.json(
-        { error: err.message || "Failed to create project" },
-        { status: 500 }
-      );
+      console.error("[workspace-api] create error:", err);
+      return Response.json({ error: "Failed to create project" }, { status: 500 });
     }
   }
 

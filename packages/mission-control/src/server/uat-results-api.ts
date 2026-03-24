@@ -8,6 +8,27 @@ import { join } from "node:path";
 import type { GSD2UatItem } from "./types";
 
 /**
+ * Validates a single path segment (e.g., sliceId).
+ * Rejects traversal sequences, path separators, and null bytes.
+ * Returns the segment unchanged if valid.
+ */
+function validateSegment(segment: string, label: string): string {
+  if (!segment || typeof segment !== "string") {
+    throw new Error("Invalid path segment");
+  }
+  if (segment.includes("\x00")) {
+    throw new Error("Invalid path segment");
+  }
+  if (segment.includes("..")) {
+    throw new Error("Invalid path segment");
+  }
+  if (segment.includes("/") || segment.includes("\\")) {
+    throw new Error("Invalid path segment");
+  }
+  return segment;
+}
+
+/**
  * Write UAT checklist results to {gsdDir}/{sliceId}-UAT-RESULTS.md.
  * Format:
  *   # UAT Results: S03
@@ -68,13 +89,17 @@ export async function handleUatResultsRequest(
     }
 
     try {
+      validateSegment(sliceId, "sliceId");
+    } catch {
+      return Response.json({ error: "Invalid request parameters" }, { status: 400 });
+    }
+
+    try {
       await writeUatResults(gsdDir, sliceId, items);
       return Response.json({ ok: true });
     } catch (err) {
-      return Response.json(
-        { error: err instanceof Error ? err.message : "Write failed" },
-        { status: 500 }
-      );
+      console.error("[uat-results-api] write error:", err);
+      return Response.json({ error: "Write failed" }, { status: 500 });
     }
   }
 
