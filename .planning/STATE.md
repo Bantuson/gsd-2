@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: Milestone complete
-stopped_at: Completed 20.2.5-13-PLAN.md — B52 WS session isolation closed
-last_updated: "2026-03-24T16:33:11.608Z"
+stopped_at: Completed 20.2.6-01-PLAN.md — 4 surgical security fixes from post-audit review
+last_updated: "2026-03-24T19:35:52Z"
 progress:
   total_phases: 17
   completed_phases: 13
@@ -17,12 +17,12 @@ progress:
 ## Project Reference
 
 **What This Is:** Mission Control — a desktop developer app where you type in chat, Claude Code executes, code lands, and dashboard panels update in real time — the full build loop in one window.
-**Current Focus:** Phase 20.2.5 — security-behaviour-closure
+**Current Focus:** Phase 20.2.6 — post-audit-security-remediation
 
 ## Current Position
 
-Phase: 20.2.5
-Plan: Not started
+Phase: 20.2.6
+Plan: 01 complete (1/2)
 
 ## Progress
 
@@ -30,6 +30,8 @@ Plan: Not started
 
 ## Recent Decisions
 
+- 20.2.6-01: FS-9/API-6/API-4 surgical one-line fixes; trust validation matches trust-api.ts registerTrustRoutes pattern
+- 20.2.6-01: FE-5/FE-6 — DOMPurify direct import removed from CodeExplorer.tsx and InlineReadPanel.tsx; sanitizeHtml() is drop-in replacement
 - B60, B61 (OAuth session binding) deferred to phase 20.2.6
 - B77 (CI signing key) deferred to CI/CD phase — out of scope for 20.2.5
 - cargo check OOM on Windows (system resource constraint) — Rust correctness verified via source inspection tests
@@ -49,6 +51,6 @@ None — Phase 20.2.5 complete. Rust compiles (cargo check passes). All security
 
 ## Session Continuity
 
-Last session: 2026-03-24T16:24:29.829Z
-Stopped at: Completed 20.2.5-13-PLAN.md — B52 WS session isolation closed
+Last session: 2026-03-24T19:35:52Z
+Stopped at: Completed 20.2.6-01-PLAN.md — 4 surgical security fixes from post-audit review
 Resume file: None
