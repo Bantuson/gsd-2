@@ -6,6 +6,20 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
+/// B72/B31: Verify the calling window is the main window.
+/// Custom #[tauri::command] functions are not restricted by Tauri capability JSON,
+/// so we enforce access control programmatically via window label check.
+fn require_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        Err(format!(
+            "Permission denied: command restricted to main window (caller: {})",
+            window.label()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Atomic counter for generating unique window labels.
 /// Avoids race condition when two windows are opened within the same millisecond.
 pub struct WindowCounter(AtomicU64);
@@ -74,8 +88,13 @@ pub async fn open_folder_dialog(app: AppHandle) -> Option<String> {
 
 /// Read a credential from the OS keychain.
 /// Returns None if the key does not exist or access is denied.
+/// B72/B31: Only callable from the "main" window.
 #[tauri::command]
-pub async fn get_credential(key: String) -> Option<String> {
+pub async fn get_credential(window: tauri::WebviewWindow, key: String) -> Option<String> {
+    if require_main_window(&window).is_err() {
+        eprintln!("[commands] get_credential: rejected call from window '{}'", window.label());
+        return None;
+    }
     if !ALLOWED_CREDENTIAL_KEYS.contains(&key.as_str()) {
         eprintln!("[commands] get_credential: rejected key: {key}");
         return None;
@@ -86,8 +105,13 @@ pub async fn get_credential(key: String) -> Option<String> {
 
 /// Write a credential to the OS keychain.
 /// Returns true on success, false on failure.
+/// B72/B31: Only callable from the "main" window.
 #[tauri::command]
-pub async fn set_credential(key: String, value: String) -> bool {
+pub async fn set_credential(window: tauri::WebviewWindow, key: String, value: String) -> bool {
+    if require_main_window(&window).is_err() {
+        eprintln!("[commands] set_credential: rejected call from window '{}'", window.label());
+        return false;
+    }
     if !ALLOWED_CREDENTIAL_KEYS.contains(&key.as_str()) {
         eprintln!("[commands] set_credential: rejected key: {key}");
         return false;
@@ -110,8 +134,13 @@ pub async fn set_credential(key: String, value: String) -> bool {
 
 /// Delete a credential from the OS keychain.
 /// Returns true on success or if key did not exist, false on error.
+/// B72/B31: Only callable from the "main" window.
 #[tauri::command]
-pub async fn delete_credential(key: String) -> bool {
+pub async fn delete_credential(window: tauri::WebviewWindow, key: String) -> bool {
+    if require_main_window(&window).is_err() {
+        eprintln!("[commands] delete_credential: rejected call from window '{}'", window.label());
+        return false;
+    }
     if !ALLOWED_CREDENTIAL_KEYS.contains(&key.as_str()) {
         eprintln!("[commands] delete_credential: rejected key: {key}");
         return false;
@@ -211,8 +240,13 @@ pub fn get_platform() -> String {
 
 /// Kill and respawn the managed Bun server process.
 /// Returns true on success.
+/// B72/B31: Only callable from the "main" window.
 #[tauri::command]
-pub async fn restart_bun(app: AppHandle) -> bool {
+pub async fn restart_bun(window: tauri::WebviewWindow, app: AppHandle) -> bool {
+    if require_main_window(&window).is_err() {
+        eprintln!("[commands] restart_bun: rejected call from window '{}'", window.label());
+        return false;
+    }
     crate::bun_manager::restart_bun(app).await;
     true
 }
