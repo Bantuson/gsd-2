@@ -91,6 +91,11 @@ export function DeviceFrame({ device, src, iframeId }: DeviceFrameProps) {
               display: "block",
             }}
             title={frame.label}
+            // B32: sandbox prevents iframe from accessing parent frame APIs via Tauri IPC.
+            // allow-scripts + allow-same-origin required for React preview apps to load and run.
+            // allow-forms required for form submission within previewed apps.
+            // Risk accepted: allow-same-origin is necessary for asset loading from same origin.
+            sandbox="allow-scripts allow-same-origin allow-forms"
           />
         </ErrorBoundaryFrame>
       </div>

@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://127.0.0.1:4200; connect-src http://127.0.0.1:4200 ws://127.0.0.1:* ws://localhost:* 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:"
+      "csp": "default-src 'self' http://127.0.0.1:4200; connect-src http://127.0.0.1:4200 http://127.0.0.1:4001 http://127.0.0.1:4002 http://127.0.0.1:4003 http://127.0.0.1:4004 http://127.0.0.1:4005 http://127.0.0.1:4006 http://127.0.0.1:4007 http://127.0.0.1:4008 http://127.0.0.1:4009 http://127.0.0.1:4010 ws://127.0.0.1:4001 ws://127.0.0.1:4002 ws://127.0.0.1:4003 ws://127.0.0.1:4004 ws://127.0.0.1:4005 ws://127.0.0.1:4006 ws://127.0.0.1:4007 ws://127.0.0.1:4008 ws://127.0.0.1:4009 ws://127.0.0.1:4010 https://api.anthropic.com; script-src 'self' 'nonce-__TAURI_NONCE__'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:"
     }
   },
   "bundle": {
@@ -63,7 +63,7 @@
     "protocol": {
       "asset": true,
       "assetScope": {
-        "allow": ["$RESOURCE/**", "$APP/**"],
+        "allow": ["$RESOURCE/**", "$APP/public/**", "$APP/dist/**"],
         "deny": []
       }
     },
