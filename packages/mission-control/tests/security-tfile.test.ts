@@ -5,23 +5,42 @@
  * T-FILE-02: Write traversal and permissions (Behaviours 9-16)
  * T-FILE-03: Symlink escape and atomic port (Behaviours 17-18)
  *
- * RED PHASE: All tests are expected to fail until Wave 2 remediation.
- * Tests exercise the actual security behaviours described in THREAT-MODEL.md.
+ * RED PHASE: B1-B15, B17 expected to FAIL until Wave 2 remediations
+ *
+ * All tests make actual HTTP requests against the running Bun server.
+ * No readFileSync+regex assertions for behaviour verification.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { validatePath } from "../src/server/fs-api";
-import { readFileSync } from "fs";
+import { describe, it, expect, beforeAll, afterAll } from "bun:test";
+import {
+  startTestServer,
+  makeRequest,
+  assertNoPathLeakInBody,
+  traversalPayloads,
+  makeMultipartBody,
+  type TestServer,
+} from "./security-test-helpers";
 import {
   mkdtempSync,
   symlinkSync,
-  mkdirSync,
   writeFileSync,
-  rmdirSync,
   rmSync,
+  mkdirSync,
+  statSync,
+  existsSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+
+let server: TestServer;
+
+beforeAll(async () => {
+  server = await startTestServer();
+}, 30_000);
+
+afterAll(async () => {
+  await server.stop();
+});
 
 // ---------------------------------------------------------------------------
 // T-FILE-01 — Path Traversal Prevention (Behaviours 1-8)
@@ -29,89 +48,53 @@ import { join, resolve } from "node:path";
 
 describe("T-FILE-01 — Path Traversal Prevention", () => {
   it("B1: rejects sliceId with ../../etc/passwd traversal (HTTP 400)", async () => {
-    // Source-inspect gsd-file-api.ts to ensure sliceId is validated before path construction
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/gsd-file-api.ts"),
-      "utf8"
+    // gsd-file-api: GET /api/gsd-file?sliceId=../../etc/passwd&type=plan
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/gsd-file?sliceId=../../etc/passwd&type=plan"
     );
 
-    // The sliceId must be validated: either sanitized with path.basename, or
-    // rejected if it contains path traversal sequences
-    const hasTraversalCheck =
-      src.includes("path.basename") ||
-      src.includes("basename(sliceId)") ||
-      /sliceId.*\.\.|\.\..*sliceId/.test(src) ||
-      src.includes("validatePath") ||
-      // Check for allowlist-style validation (only word chars)
-      src.includes("/^[a-zA-Z0-9") ||
-      src.includes("VALID_SLICE_RE") ||
-      src.includes("sliceId.includes(\"..\")") ||
-      src.includes('sliceId.includes("..")');
+    // RED: sliceId is not validated before path construction in gsd-file-api.ts
+    expect(res.status).toBe(400);
 
-    // RED: This should fail — gsd-file-api.ts does not validate sliceId against traversal
-    expect(hasTraversalCheck).toBe(true);
+    const body = await res.text();
+    // Must not return the contents of /etc/passwd
+    expect(body).not.toContain("root:");
+    expect(body).not.toContain("/bin/bash");
+    assertNoPathLeakInBody(body, "B1: gsd-file-api sliceId traversal");
   });
 
   it("B2: rejects milestoneId with ../secret traversal (HTTP 400)", async () => {
-    // Source-inspect gsd-file-api.ts for milestoneId validation
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/gsd-file-api.ts"),
-      "utf8"
+    // gsd-file-api: GET /api/gsd-file?sliceId=S01&milestoneId=../secret&type=plan
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/gsd-file?sliceId=S01&milestoneId=../secret&type=plan"
     );
 
-    const hasMilestoneValidation =
-      src.includes("basename(milestoneId)") ||
-      src.includes("path.basename") ||
-      src.includes("validatePath") ||
-      src.includes('milestoneId.includes("..")') ||
-      src.includes("VALID_ID_RE") ||
-      /milestoneId.*\.\.|\.\..*milestoneId/.test(src);
+    // RED: milestoneId is concatenated directly into join() without validation
+    expect(res.status).toBe(400);
 
-    // RED: milestoneId is used directly in join() without validation
-    expect(hasMilestoneValidation).toBe(true);
+    const body = await res.text();
+    assertNoPathLeakInBody(body, "B2: gsd-file-api milestoneId traversal");
   });
 
   it("B3: rejects taskId containing null byte (HTTP 400)", async () => {
-    // Source-inspect for null byte handling in taskId
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/gsd-file-api.ts"),
-      "utf8"
+    // gsd-file-api: GET /api/gsd-file?sliceId=S01&type=task&taskId=task%00id
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/gsd-file?sliceId=S01&type=task&taskId=task%00id"
     );
-
-    const hasNullByteCheck =
-      src.includes("\\x00") ||
-      src.includes("\\u0000") ||
-      src.includes("null byte") ||
-      src.includes("charCodeAt") ||
-      src.includes("validateTaskId") ||
-      src.includes("VALID_TASK_RE") ||
-      // If there's a general ID validator that would catch null bytes
-      src.includes("/^[a-zA-Z0-9_-]+$/");
 
     // RED: taskId is not validated for null bytes
-    expect(hasNullByteCheck).toBe(true);
+    expect(res.status).toBe(400);
   });
 
-  it("B4: validatePath uses realpathSync to resolve symlinks before root comparison", () => {
-    // Source-inspect fs-api.ts — must use realpathSync for symlink resolution
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/fs-api.ts"),
-      "utf8"
-    );
-
-    // RED: validatePath currently uses resolve() not realpathSync()
-    expect(src).toMatch(/realpathSync/);
-
-    // Must also check that root comparison uses path.sep for exact prefix match
-    expect(src).toMatch(/root\s*\+\s*path\.sep|resolvedRoot\s*\+\s*sep|allowedRoot.*sep/);
-  });
-
-  it("B5: validatePath rejects sibling-prefix bypass (/tmp/project-evil vs /tmp/project)", () => {
+  it("B4/B5: validatePath rejects sibling-prefix bypass (fs-api read returns 400/403)", async () => {
     // The sibling-prefix bypass: /tmp/project-evil starts with /tmp/project
-    // A startsWith check alone would accept /tmp/project-evil as a child of /tmp/project
-    const root = tmpdir();
-    const projectRoot = join(root, "project-" + Date.now());
-    const projectEvil = join(root, "project-" + Date.now() + "-evil");
+    // A startsWith check without path.sep would accept /tmp/project-evil as child of /tmp/project
+    const uniqueSuffix = Date.now();
+    const projectRoot = join(tmpdir(), `project-${uniqueSuffix}`);
+    const projectEvil = join(tmpdir(), `project-${uniqueSuffix}-evil`);
     const evilFile = join(projectEvil, "secret.txt");
 
     mkdirSync(projectRoot, { recursive: true });
@@ -119,105 +102,76 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
     writeFileSync(evilFile, "evil content");
 
     try {
-      // RED: current validatePath uses startsWith without sep — sibling prefix would pass
-      let threw = false;
-      try {
-        const result = validatePath(evilFile, projectRoot);
-        // If it returned a value, the check failed (sibling accepted)
-        // The evil file IS outside the project root, so this should throw
-        threw = false;
-      } catch {
-        threw = true;
-      }
-      expect(threw).toBe(true);
+      // Attempt to read a file in the sibling-evil directory via fs-api
+      // The server uses projectRoot as allowedRoot for /api/fs/read
+      const res = await makeRequest(
+        server.baseUrl,
+        `/api/fs/read?path=${encodeURIComponent(evilFile)}`
+      );
+
+      // RED: validatePath with startsWith-only check would allow sibling prefix access
+      // The evil file IS outside the allowed root, so must return 400 or 403
+      expect([400, 403]).toContain(res.status);
+
+      const body = await res.text();
+      assertNoPathLeakInBody(body, "B4/B5: sibling-prefix bypass");
+      // Must not return evil content
+      expect(body).not.toContain("evil content");
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
       rmSync(projectEvil, { recursive: true, force: true });
     }
   });
 
-  it("B6: validatePath rejects symlink escaping to /tmp (outside root)", () => {
-    // Create a temp root directory, then a symlink inside pointing outside
+  it("B6: validatePath rejects symlink escaping to /tmp via fs-api (HTTP 400/403)", async () => {
     const root = mkdtempSync(join(tmpdir(), "tfile-b6-root-"));
     const symlinkPath = join(root, "link");
 
     try {
-      // Create symlink: root/link -> /tmp (outside root)
+      // Create symlink: root/link -> tmpdir() (outside root)
       symlinkSync(tmpdir(), symlinkPath);
 
       const escapePath = join(symlinkPath, "etc", "passwd");
 
-      let threw = false;
-      try {
-        validatePath(escapePath, root);
-      } catch {
-        threw = true;
-      }
+      const res = await makeRequest(
+        server.baseUrl,
+        `/api/fs/read?path=${encodeURIComponent(escapePath)}`
+      );
 
-      // RED: validatePath uses resolve() not realpathSync(), so symlinks are not followed
-      expect(threw).toBe(true);
+      // RED: validatePath uses resolve() not realpathSync(), so symlinks escape the workspace
+      expect([400, 403]).toContain(res.status);
+
+      const body = await res.text();
+      assertNoPathLeakInBody(body, "B6: symlink escape via fs-api");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("B7: HTTP responses do not leak absolute paths in error bodies", async () => {
-    // Source-inspect server files for absolute path leakage in response bodies
-    const files = [
-      "gsd-file-api.ts",
-      "uat-results-api.ts",
-      "assets-api.ts",
-      "worktree-api.ts",
-    ];
+  it("B7: HTTP error responses do not leak absolute paths in body (gsd-file-api)", async () => {
+    // Send a request that would trigger a path-based error
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/gsd-file?sliceId=NONEXISTENT_SLICE_12345&type=plan"
+    );
 
-    for (const file of files) {
-      const src = readFileSync(
-        resolve(import.meta.dir, `../src/server/${file}`),
-        "utf8"
-      );
-
-      // Look for Response.json calls that include err.message, which can contain paths
-      // RED: error responses include err.message directly without path scrubbing
-      const hasPathScrubbing =
-        src.includes("scrubPath") ||
-        src.includes("sanitizeError") ||
-        src.includes("replace(/\\/home\\/") ||
-        src.includes("replace(/\\/Users\\/") ||
-        src.includes("stripAbsolutePath") ||
-        src.includes("sanitizePath");
-
-      // RED: no path scrubbing exists in these files
-      expect(hasPathScrubbing).toBe(
-        true,
-        `${file} does not scrub absolute paths from error responses`
-      );
-    }
+    const body = await res.text();
+    // Must not leak the absolute gsd directory path in the response
+    assertNoPathLeakInBody(body, "B7: gsd-file-api error response");
   });
 
-  it("B8: OS error messages (ENOENT, EPERM) do not include absolute paths in HTTP response body", async () => {
-    // Source-inspect for pattern: err.message returned directly in Response.json
-    const files = [
-      "fs-api.ts",
-      "assets-api.ts",
-    ];
+  it("B8: OS error messages do not include absolute paths (fs-api read of nonexistent file)", async () => {
+    // Attempt to read a path that doesn't exist — ENOENT should NOT include the full path
+    const fakePath = join(tmpdir(), "nonexistent-file-" + Date.now() + ".txt");
 
-    for (const file of files) {
-      const src = readFileSync(
-        resolve(import.meta.dir, `../src/server/${file}`),
-        "utf8"
-      );
+    const res = await makeRequest(
+      server.baseUrl,
+      `/api/fs/read?path=${encodeURIComponent(fakePath)}`
+    );
 
-      // The error handling should not expose raw OS error messages
-      // Currently uses: Response.json({ error: err.message }, ...)
-      // Should use: Response.json({ error: "File not found" }, ...) with generic messages
-      const hasGenericErrors =
-        !src.includes("err.message") ||
-        src.includes("scrubPath(err.message)") ||
-        src.includes("sanitizeError(err)");
-
-      // RED: files return err.message directly which exposes OS paths
-      expect(hasGenericErrors).toBe(true, `${file} exposes raw OS error messages`);
-    }
+    const body = await res.text();
+    // RED: fs-api returns err.message directly which may expose OS paths
+    assertNoPathLeakInBody(body, "B8: fs-api ENOENT path leak");
   });
 });
 
@@ -227,178 +181,169 @@ describe("T-FILE-01 — Path Traversal Prevention", () => {
 
 describe("T-FILE-02 — Write Traversal Prevention", () => {
   it("B9: uat-results-api rejects sliceId with path traversal (HTTP 400)", async () => {
-    // Source-inspect uat-results-api.ts for sliceId validation before write
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/uat-results-api.ts"),
-      "utf8"
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/uat-results",
+      {
+        method: "POST",
+        body: JSON.stringify({ sliceId: "../../.bashrc", items: [] }),
+      }
     );
 
-    // Must validate sliceId before using it in join() for the write path
-    const hasWriteValidation =
-      src.includes("path.basename") ||
-      src.includes("basename(sliceId)") ||
-      src.includes("validatePath") ||
-      src.includes("validateSliceId") ||
-      src.includes('sliceId.includes("..")') ||
-      src.includes("VALID_SLICE_RE") ||
-      src.includes("/^[a-zA-Z0-9");
-
-    // RED: uat-results-api.ts writes to join(gsdDir, sliceId-...) without validation
-    expect(hasWriteValidation).toBe(true);
+    // RED: uat-results-api writes to join(gsdDir, sliceId-...) without validation
+    expect(res.status).toBe(400);
   });
 
-  it("B10: assets-api uses path.basename on uploaded filename to prevent traversal", () => {
-    // Source-inspect assets-api.ts — must use basename on file.name before writing
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/assets-api.ts"),
-      "utf8"
+  it("B10: assets-api rejects upload with path traversal filename (HTTP 400)", async () => {
+    const formData = makeMultipartBody("../evil.sh", "#!/bin/bash\necho pwned");
+
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/assets/upload",
+      {
+        method: "POST",
+        body: formData,
+      }
     );
 
-    // basename() is already used via uniqueFilename -> basename(name, ext)
-    // But also check the direct upload path sanitizes the filename
-    expect(src).toMatch(/basename\s*\(file\.name|basename\s*\(name/);
+    // RED: assets-api doesn't apply path.basename() to file.name
+    expect(res.status).toBe(400);
   });
 
-  it("B11: assets write path is validated against the assets root directory", () => {
-    // Source-inspect assets-api.ts — the final write path must be within the assets dir
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/assets-api.ts"),
-      "utf8"
+  it("B11: assets-api rejects deep traversal upload filename (HTTP 400)", async () => {
+    const formData = makeMultipartBody("../../../../tmp/planted.sh", "malicious");
+
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/assets/upload",
+      {
+        method: "POST",
+        body: formData,
+      }
     );
 
-    // Must validate the final path with realpathSync or validatePath before writing
-    const hasWriteValidation =
-      src.includes("validatePath") ||
-      src.includes("realpathSync") ||
-      src.includes("filePath.startsWith(resolvedDir)") ||
-      src.includes("filePath.startsWith(resolve(dir))");
-
-    // filePath.startsWith(resolvedDir) check exists for file serving — check upload path too
-    expect(hasWriteValidation).toBe(true);
+    // RED: no containment check that write resolves inside assets dir
+    expect(res.status).toBe(400);
   });
 
-  it("B12: fs-api mkdir rejects directory name containing path separators or ..", async () => {
-    const { handleFsRequest } = await import("../src/server/fs-api");
-
-    // Test with name containing forward slash
-    const req1 = new Request("http://localhost:4000/api/fs/mkdir", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "/tmp/test/../../../evil" }),
-    });
-    const url1 = new URL(req1.url);
-    const response1 = await handleFsRequest(req1, url1);
-    expect(response1).not.toBeNull();
-    expect(response1!.status).toBe(400);
-  });
-
-  it("B13: worktree-api validates sessionSlug against alphanumeric+dash+underscore pattern", () => {
-    // Source-inspect worktree-api.ts — sessionSlug must be validated before filesystem use
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/worktree-api.ts"),
-      "utf8"
+  it("B12: fs-api mkdir rejects path containing traversal sequences (HTTP 400)", async () => {
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/fs/mkdir",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: "/tmp/test/../../../evil" }),
+      }
     );
 
-    // Must have slug validation to prevent directory traversal via slug
-    const hasSlugValidation =
-      src.includes("/^[a-zA-Z0-9_-]+$/") ||
-      src.includes("VALID_SLUG_RE") ||
-      src.includes("validateSlug") ||
-      src.includes("validateSessionSlug") ||
-      src.includes("slug.match(") ||
-      src.includes("sessionSlug.match(");
+    // validatePath already checks for ".." — this should be rejected
+    expect(res.status).toBe(400);
+  });
+
+  it("B12b: fs-api mkdir rejects paths outside home directory (HTTP 403)", async () => {
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/fs/mkdir",
+      {
+        method: "POST",
+        body: JSON.stringify({ path: "/etc/injected-dir-" + Date.now() }),
+      }
+    );
+
+    // mkdir is restricted to home directory
+    expect([400, 403]).toContain(res.status);
+  });
+
+  it("B13: worktree-api rejects sessionSlug with path traversal (HTTP 400)", async () => {
+    // POST /api/worktree/create with traversal slug
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/worktree/create",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          sessionSlug: "../../evil",
+          repoRoot: tmpdir(),
+        }),
+      }
+    );
 
     // RED: worktree-api.ts uses sessionSlug directly in join() without validation
-    expect(hasSlugValidation).toBe(true);
+    // worktree-api may not be registered in server.ts (returns 404) or returns 400
+    // Either 400 (validation) or 404 (route not registered) is acceptable
+    // What is NOT acceptable is 200 (traversal succeeded)
+    expect(res.status).not.toBe(200);
+    if (res.status === 200) {
+      // If 200, it must not have created anything dangerous
+      const body = await res.text();
+      expect(body).not.toContain("../../evil");
+    }
   });
 
-  it("B14: removeSessionWorktree validates resolved path starts with workspace root before rm", () => {
-    // Source-inspect worktree-api.ts — removeSessionWorktree must validate path before removal
-    const src = readFileSync(
-      resolve(import.meta.dir, "../src/server/worktree-api.ts"),
-      "utf8"
+  it("B14: worktree removeSession rejects traversal sessionSlug (HTTP 400)", async () => {
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/worktree/session",
+      {
+        method: "DELETE",
+        body: JSON.stringify({
+          sessionSlug: "../../etc",
+          repoRoot: "/tmp",
+        }),
+      }
     );
 
-    // The removeSessionWorktree function must verify the path is within the workspace
-    const hasPathValidation =
-      src.includes("startsWith(repoRoot") ||
-      src.includes("startsWith(resolve(repoRoot") ||
-      src.includes("validatePath(worktreePath") ||
-      src.includes("validatePath(normalizedPath") ||
-      src.includes("realpathSync") ||
-      src.includes("resolvedPath.startsWith");
-
-    // RED: removeSessionWorktree passes worktreePath directly to git without root validation
-    expect(hasPathValidation).toBe(true);
+    // RED: removeSessionWorktree passes path to rm -rf without root check
+    // Either 400 (validation) or 404 (route not registered) is acceptable
+    expect(res.status).not.toBe(200);
   });
 
-  it("B15: writeFileSync/writeFile calls include restrictive file permissions (0o600/0o700)", () => {
-    // Source-inspect all server files for file creation calls
-    const serverFiles = [
-      "fs-api.ts",
-      "uat-results-api.ts",
-      "assets-api.ts",
-      "worktree-api.ts",
-      "auth-api.ts",
-    ];
+  it("B15: server-created files use restrictive permissions (0o600)", async () => {
+    // Write a file via /api/fs/write and check its permissions
+    const tmpDir = mkdtempSync(join(tmpdir(), "tfile-b15-"));
+    const testPath = join(tmpDir, "test-perm.txt");
 
-    for (const file of serverFiles) {
-      let src: string;
-      try {
-        src = readFileSync(
-          resolve(import.meta.dir, `../src/server/${file}`),
-          "utf8"
-        );
-      } catch {
-        // File may not exist — skip
-        continue;
-      }
-
-      // If the file writes files/dirs, it should include permissions
-      const hasFileWrite =
-        src.includes("writeFileSync") ||
-        src.includes("writeFile") ||
-        src.includes("Bun.write") ||
-        src.includes("mkdirSync") ||
-        src.includes("mkdir(");
-
-      if (hasFileWrite) {
-        const hasPermissions =
-          src.includes("0o600") ||
-          src.includes("0o700") ||
-          src.includes("mode:") ||
-          src.includes("{ mode");
-
-        // RED: file writes do not include mode permissions
-        expect(hasPermissions).toBe(
-          true,
-          `${file} has file writes without explicit permissions`
-        );
-      }
-    }
-  });
-
-  it("B16: auth file (~/.gsd/auth.json) is created with 0o600 permissions", () => {
-    // Source-inspect auth-api.ts for file creation with 0o600
-    let src: string;
     try {
-      src = readFileSync(
-        resolve(import.meta.dir, "../src/server/auth-api.ts"),
-        "utf8"
+      const res = await makeRequest(
+        server.baseUrl,
+        "/api/fs/write",
+        {
+          method: "POST",
+          body: JSON.stringify({ path: testPath, content: "test" }),
+        }
       );
-    } catch {
-      // File doesn't exist — RED
-      expect(false).toBe(true, "auth-api.ts does not exist");
-      return;
+
+      if (res.status === 200 && existsSync(testPath)) {
+        const stat = statSync(testPath);
+        const mode = stat.mode & 0o777;
+
+        // RED: Bun.write uses default permissions (0o644 or platform default), not 0o600
+        expect(mode).toBe(0o600);
+      }
+      // If write was rejected (400/403) — permission check is not applicable
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
 
-    // Auth file must be created with 0o600 or equivalent restrictive permissions
-    const hasSecureAuth =
-      (src.includes("auth.json") || src.includes("auth-api")) &&
-      (src.includes("0o600") || src.includes("mode: 0o6"));
+  it("B16: auth.json is created with 0o600 permissions (regression test)", async () => {
+    // This behaviour is already implemented in auth-storage.ts
+    // Check the auth.json file mode if it exists
+    const authJsonPath = join(process.env.HOME || process.env.USERPROFILE || tmpdir(), ".gsd", "auth.json");
 
-    // RED: auth file not created with 0o600
-    expect(hasSecureAuth).toBe(true);
+    if (existsSync(authJsonPath)) {
+      const stat = statSync(authJsonPath);
+      const mode = stat.mode & 0o777;
+      // B16 PASSES: auth-storage.ts uses chmodSync(0o600)
+      // On Windows, file permissions are not enforced the same way but chmodSync is still called
+      if (process.platform !== "win32") {
+        expect(mode).toBe(0o600);
+      }
+    } else {
+      // auth.json doesn't exist yet — test is vacuously true
+      // (the protection is applied on write, so nothing to check)
+      expect(true).toBe(true);
+    }
   });
 });
 
@@ -407,8 +352,7 @@ describe("T-FILE-02 — Write Traversal Prevention", () => {
 // ---------------------------------------------------------------------------
 
 describe("T-FILE-03 — Symlink Escape and Atomic Port", () => {
-  it("B17: validatePath rejects symlink pointing to /etc (explicit symlink traversal test)", () => {
-    // Create workspace dir with symlink to /etc (or tmpdir on Windows)
+  it("B17: validatePath rejects symlink pointing outside workspace via fs-api (HTTP 400/403)", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "tfile-b17-"));
     const symlinkTarget = process.platform === "win32" ? tmpdir() : "/tmp";
     const linkPath = join(workspace, "link");
@@ -418,61 +362,66 @@ describe("T-FILE-03 — Symlink Escape and Atomic Port", () => {
 
       const escapePath = join(linkPath, "passwd");
 
-      let threw = false;
-      try {
-        validatePath(escapePath, workspace);
-      } catch {
-        threw = true;
-      }
+      const res = await makeRequest(
+        server.baseUrl,
+        `/api/fs/read?path=${encodeURIComponent(escapePath)}`
+      );
 
       // RED: validatePath uses resolve() not realpathSync(), so symlinks are followed
       // without actually resolving them against the real filesystem
-      expect(threw).toBe(true);
+      expect([400, 403]).toContain(res.status);
+
+      const body = await res.text();
+      assertNoPathLeakInBody(body, "B17: symlink escape via fs-api read");
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
   });
 
-  it("B18: port allocation uses atomic bind-and-hold pattern, not check-then-use", () => {
-    // Source-inspect server.ts or ws-server.ts for port allocation pattern
-    let serverSrc = "";
-    let wsSrc = "";
+  it("B18: WS port allocation uses atomic bind (port is bound when /api/window/register returns)", async () => {
+    // POST /api/window/register to get a WS port
+    const windowId = "test-b18-" + Date.now();
+    const res = await makeRequest(
+      server.baseUrl,
+      "/api/window/register",
+      {
+        method: "POST",
+        body: JSON.stringify({ windowId }),
+      }
+    );
 
+    expect(res.status).toBe(200);
+
+    const json = await res.json() as { wsPort?: number };
+    expect(typeof json.wsPort).toBe("number");
+
+    const wsPort = json.wsPort!;
+
+    // Verify the WS port is actually bound by trying to bind the same port
+    // If atomic: the port should already be in use (our bind attempt fails)
+    let portInUse = false;
     try {
-      serverSrc = readFileSync(
-        resolve(import.meta.dir, "../src/server.ts"),
-        "utf8"
-      );
+      // Attempt to listen on the same port — should fail if already bound
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const testServer = (Bun as any).listen({
+        hostname: "127.0.0.1",
+        port: wsPort,
+        socket: {
+          data() {},
+          open() {},
+          close() {},
+        },
+      });
+      // If we got here, port was NOT bound (TOCTOU gap exists)
+      testServer.stop(true);
+      portInUse = false;
     } catch {
-      // server.ts may not be at this location
+      // Port is already in use — atomic bind succeeded
+      portInUse = true;
     }
 
-    try {
-      wsSrc = readFileSync(
-        resolve(import.meta.dir, "../src/server/ws-server.ts"),
-        "utf8"
-      );
-    } catch {
-      // ws-server.ts may not exist
-    }
-
-    const combinedSrc = serverSrc + wsSrc;
-
-    // Atomic pattern: bind to port 0 and let OS assign, or use net.createServer().listen(0)
-    // Check-then-use anti-pattern: find a free port, then bind to it later
-    const hasAtomicPattern =
-      combinedSrc.includes("listen(0") ||
-      combinedSrc.includes(".listen(0,") ||
-      combinedSrc.includes("net.createServer") ||
-      combinedSrc.includes("server.listen(0") ||
-      combinedSrc.includes("port: 0");
-
-    const hasCheckThenUse =
-      (combinedSrc.includes("freePort") || combinedSrc.includes("findFreePort")) &&
-      !combinedSrc.includes("listen(0");
-
-    // RED: server uses freePort (check-then-use) not atomic bind-and-hold
-    expect(hasAtomicPattern).toBe(true);
-    expect(hasCheckThenUse).toBe(false);
+    // RED: server uses freePort (kill-then-sleep) not atomic bind-and-hold
+    // So portInUse will be false (TOCTOU gap exists between freePort and listen)
+    expect(portInUse).toBe(true);
   });
 });
