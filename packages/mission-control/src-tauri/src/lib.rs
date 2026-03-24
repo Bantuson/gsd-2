@@ -15,6 +15,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(bun_state)
         .manage(commands::WindowCounter::new())
+        .manage(commands::OAuthNonces::new())
         .plugin(
             WindowStateBuilder::default()
                 .with_state_flags(StateFlags::all())
@@ -46,7 +47,37 @@ pub fn run() {
 
                         if url_str.starts_with("gsd://oauth/callback") {
                             let params = parse_oauth_params(&url_str);
-                            let _ = app_handle.emit("oauth-callback", params);
+
+                            // B60: Validate state nonce — drop events with unknown nonces.
+                            // B61: Emit oauth-callback only to the originating window, not all windows.
+                            let state_nonce = params
+                                .get("state")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            // Look up the originating window label for this nonce
+                            let window_label: Option<String> = app_handle
+                                .state::<commands::OAuthNonces>()
+                                .0
+                                .lock()
+                                .ok()
+                                .and_then(|mut map| map.remove(&state_nonce));
+
+                            match window_label {
+                                None => {
+                                    // B60: Unknown nonce — drop silently
+                                    eprintln!("[on_open_url] dropping oauth-callback: unknown state nonce");
+                                }
+                                Some(label) => {
+                                    // B61: Emit only to the registered window
+                                    if let Some(window) = app_handle.get_webview_window(&label) {
+                                        let _ = window.emit("oauth-callback", params);
+                                    } else {
+                                        eprintln!("[on_open_url] registered window '{label}' not found — dropping event");
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -97,6 +128,7 @@ pub fn run() {
             commands::retry_dep_check,
             commands::reveal_path,
             commands::open_new_window,
+            commands::register_oauth_nonce,
             check_for_updates,
             install_update,
         ])

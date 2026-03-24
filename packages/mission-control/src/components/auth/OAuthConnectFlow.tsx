@@ -14,6 +14,27 @@ export interface OAuthConnectFlowProps {
 }
 
 // ---------------------------------------------------------------------------
+// URL Validation
+// ---------------------------------------------------------------------------
+
+/**
+ * Validates that a URL is safe to open externally.
+ * SECURITY (B68): Only https:// URLs are permitted.
+ * This prevents javascript:, data:, ftp:, and other dangerous schemes from reaching the OS.
+ *
+ * @export - exported for testing in security-txss.test.ts
+ */
+export function validateOAuthUrl(url: string): boolean {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -29,6 +50,11 @@ function getProviderDisplay(provider: string): string {
 }
 
 async function openInBrowser(url: string): Promise<void> {
+  // B68: Validate URL scheme before opening externally
+  if (!validateOAuthUrl(url)) {
+    console.error("[OAuthConnectFlow] Rejected non-https URL:", url);
+    return;
+  }
   if (typeof window !== "undefined" && "__TAURI__" in window) {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("open_external", { url }).catch(() => window.open(url, "_blank"));

@@ -1,7 +1,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+use url::Url;
 
 /// Atomic counter for generating unique window labels.
 /// Avoids race condition when two windows are opened within the same millisecond.
@@ -14,6 +17,34 @@ impl WindowCounter {
     pub fn next(&self) -> u64 {
         self.0.fetch_add(1, Ordering::SeqCst)
     }
+}
+
+/// B60/B61 — OAuth nonce registry: maps state nonce → originating window label.
+/// Used by on_open_url in lib.rs to validate and route oauth-callback events.
+pub struct OAuthNonces(pub Arc<Mutex<HashMap<String, String>>>);
+
+impl OAuthNonces {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(HashMap::new())))
+    }
+}
+
+/// Register a state nonce for the OAuth flow, bound to the given window label.
+/// Called from OAuthConnectFlow.tsx before opening the external browser.
+/// B60: prevents oauth-callback from being emitted for unknown state nonces.
+/// B61: binds the callback to the originating window, not all windows.
+#[tauri::command]
+pub async fn register_oauth_nonce(
+    nonces: tauri::State<'_, OAuthNonces>,
+    nonce: String,
+    window_label: String,
+) -> Result<(), String> {
+    let mut map = nonces
+        .0
+        .lock()
+        .map_err(|_| "nonce lock poisoned".to_string())?;
+    map.insert(nonce, window_label);
+    Ok(())
 }
 
 const KEYCHAIN_SERVICE: &str = "gsd-mission-control";
@@ -117,24 +148,49 @@ pub async fn reveal_path(app: AppHandle, path: String) -> bool {
         .map(|_| true)
         .unwrap_or_else(|_| {
             // Fallback: open directory itself in file manager
-            let url = format!("file://{}", path);
+            // B70: Use Url::from_file_path() for safe URL construction (no string concat)
+            let file_url = match Url::from_file_path(std::path::Path::new(&path)) {
+                Ok(u) => u.to_string(),
+                Err(_) => {
+                    eprintln!("[commands] reveal_path: failed to build file URL for {path}");
+                    return false;
+                }
+            };
             app.opener()
-                .open_url(url, None::<String>)
+                .open_url(file_url, None::<String>)
                 .map(|_| true)
                 .unwrap_or(false)
         })
 }
 
 /// Open a URL in the system default browser.
+/// B69: URL is validated via Url::parse() before use.
+/// B68: Only https:// scheme is permitted (defense in depth — frontend also checks).
+/// The re-serialized URL from the parser is used, not the raw input string,
+/// to prevent parser differential attacks.
 /// Returns true on success.
 #[tauri::command]
 pub async fn open_external(app: AppHandle, url: String) -> bool {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        eprintln!("[commands] open_external: rejected non-http(s) url: {url}");
+    // B69: Parse via URL library — rejects malformed and dangerous URLs
+    let parsed = match Url::parse(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[commands] open_external: invalid URL rejected: {e}");
+            return false;
+        }
+    };
+
+    // B68: Only allow https:// scheme
+    if parsed.scheme() != "https" {
+        eprintln!("[commands] open_external: rejected non-https scheme: {}", parsed.scheme());
         return false;
     }
+
+    // Use the re-serialized URL from the parser (not the raw input string)
+    let safe_url = parsed.to_string();
+
     app.opener()
-        .open_url(&url, None::<String>)
+        .open_url(safe_url, None::<String>)
         .map(|_| true)
         .unwrap_or_else(|e| {
             eprintln!("[commands] open_external error: {e}");
