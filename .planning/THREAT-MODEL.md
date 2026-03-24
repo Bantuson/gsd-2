@@ -14,6 +14,7 @@ This document records the security threat model for Mission Control, including a
 
 **Mitigations in place:**
 - B16/B58: auth.json is created with mode 0o600 (owner read/write only) on every write via chmodSync
+- **Windows note:** On Windows, `chmodSync(path, 0o600)` maps to NTFS ACLs. The effective protection depends on the NTFS ACL configuration, which by default grants the owning user read/write access only for files created in their home directory. The 0o600 permission call is best-effort on Windows — for elevated-privilege scenarios, the underlying NTFS ACL behavior provides equivalent protection in typical user-space home directory configurations.
 - B50: HTTP API requires per-launch token, preventing remote access to the login-api-key endpoint
 - B37: Host header validation restricts API access to 127.0.0.1:4200 only
 - The auth.json file is in the user's home directory (~/.gsd/), accessible only to the owning user
