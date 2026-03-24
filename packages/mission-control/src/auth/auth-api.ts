@@ -218,7 +218,30 @@ export async function saveApiKey(provider: string, key: string): Promise<boolean
 // ---------------------------------------------------------------------------
 
 /**
+ * B62: Keychain credential keys that must be cleared on logout.
+ * Matches ALLOWED_CREDENTIAL_KEYS in src-tauri/src/commands.rs.
+ */
+const KEYCHAIN_CREDENTIAL_KEYS = [
+  "anthropic_api_key",
+  "github_token",
+  "openrouter_api_key",
+  "claude_access_token",
+  "claude_refresh_token",
+] as const;
+
+function keychainKeysForProvider(provider?: string): string[] {
+  if (!provider) return [...KEYCHAIN_CREDENTIAL_KEYS]; // all keys on full logout
+  const providerKeyMap: Record<string, string[]> = {
+    anthropic: ["anthropic_api_key", "claude_access_token", "claude_refresh_token"],
+    github: ["github_token"],
+    openrouter: ["openrouter_api_key"],
+  };
+  return providerKeyMap[provider] || [];
+}
+
+/**
  * Remove credentials for a provider (or all providers when omitted).
+ * Also clears OS keychain entries via Tauri IPC (B62).
  */
 export async function changeProvider(provider?: string): Promise<boolean> {
   try {
@@ -227,6 +250,20 @@ export async function changeProvider(provider?: string): Promise<boolean> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(provider ? { provider } : {}),
     });
+
+    // B62: Also clear OS keychain entries via Tauri IPC.
+    // This runs in the Tauri webview so invoke() is available.
+    // Failures are logged but don't block the logout flow (keychain may not be initialized).
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const keys = keychainKeysForProvider(provider);
+      await Promise.allSettled(
+        keys.map(key => invoke("delete_credential", { key }))
+      );
+    } catch {
+      // Tauri IPC not available (e.g., running in browser dev mode) — skip keychain cleanup
+    }
+
     return r.ok;
   } catch {
     return false;
