@@ -27,12 +27,18 @@ const ALLOWED_CREDENTIAL_KEYS: &[&str] = &[
 ];
 
 /// Open a native folder picker dialog. Returns the selected path or None if cancelled.
+/// B47/B80: Uses tokio oneshot channel with the async callback variant to avoid
+/// blocking the Tokio executor with a blocking OS dialog call.
 #[tauri::command]
 pub async fn open_folder_dialog(app: AppHandle) -> Option<String> {
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<String>>();
     app.dialog()
         .file()
-        .blocking_pick_folder()
-        .map(|p| p.to_string())
+        .pick_folder(move |folder| {
+            let result = folder.map(|p| p.to_string());
+            let _ = tx.send(result);
+        });
+    rx.await.unwrap_or(None)
 }
 
 /// Read a credential from the OS keychain.
