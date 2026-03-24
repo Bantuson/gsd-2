@@ -8,9 +8,13 @@ const commandsRs = readFileSync(
 );
 
 describe("B2: open_external URL scheme allowlist", () => {
-  it("checks for https:// and http:// before opening URL", () => {
-    expect(commandsRs).toContain('!url.starts_with("https://")');
-    expect(commandsRs).toContain('!url.starts_with("http://")');
+  it("checks for https:// before opening URL (B68/B69: uses Url::parse for safe URL validation)", () => {
+    // Phase 20.2.5 B68/B69 remediation: replaced starts_with() string check with Url::parse()
+    // The old pattern (starts_with("https://")) was replaced with proper URL parser-based validation.
+    // Verify the function uses Url::parse and checks the scheme via parsed.scheme()
+    expect(commandsRs).toMatch(/Url::parse\(&url\)/);
+    // Must reject non-https scheme (B68 — only https:// allowed for open_external)
+    expect(commandsRs).toContain('parsed.scheme() != "https"');
   });
 
   it("returns false for rejected URLs", () => {

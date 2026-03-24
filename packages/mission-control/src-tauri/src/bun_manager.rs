@@ -175,11 +175,18 @@ async fn watch_bun_process(app: AppHandle) {
 /// Kill the Bun server cleanly. Called on window close.
 pub async fn kill_bun_server(app: AppHandle) {
     if let Some(state) = app.try_state::<BunState>() {
-        let mut guard = state.child.lock().unwrap_or_else(|e| {
-            eprintln!("[bun_manager] WARNING: mutex poisoned, recovering: {e}");
-            e.into_inner()
-        });
-        if let Some(mut child) = guard.take() {
+        // Take the child process out of the mutex guard and immediately drop the guard.
+        // This ensures the MutexGuard (non-Send) is NOT held across the async .await boundary.
+        // B45/B78: unwrap_or_else recovers from poisoned mutex instead of panicking.
+        let child_opt = {
+            let mut guard = state.child.lock().unwrap_or_else(|e| {
+                eprintln!("[bun_manager] WARNING: mutex poisoned, recovering: {e}");
+                e.into_inner()
+            });
+            guard.take()
+            // guard is dropped here at end of block
+        };
+        if let Some(mut child) = child_opt {
             // Send SIGTERM (or TerminateProcess on Windows)
             let _ = child.kill();
             // B46/B79: move blocking wait to thread pool — do not block Tokio executor

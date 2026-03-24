@@ -53,12 +53,18 @@ describe("TAURI-01: src-tauri scaffold exists", () => {
     expect(conf.build?.devUrl).toBe("http://127.0.0.1:4200");
   });
 
-  it("tauri.conf.json CSP allows WebSocket on ws://localhost:*", () => {
+  it("tauri.conf.json CSP allows WebSocket on specific ports (B67: no wildcard ws://localhost:* or ws://127.0.0.1:*)", () => {
+    // Phase 20.2.5 B67 remediation: CSP connect-src uses specific WS ports instead of wildcard.
+    // The old wildcard ws://localhost:* was replaced with enumerated ports ws://127.0.0.1:4001-4010.
     const conf = JSON.parse(
       readFileSync(join(SRC_TAURI, "tauri.conf.json"), "utf-8")
     );
     const csp: string = conf.app?.security?.csp ?? "";
-    expect(csp).toContain("ws://localhost:*");
+    // Must include at least one specific WS port (not wildcard)
+    expect(csp).toMatch(/ws:\/\/127\.0\.0\.1:\d+/);
+    // Must NOT use wildcard ws://localhost:* or ws://127.0.0.1:* (B67 requirement)
+    expect(csp).not.toContain("ws://localhost:*");
+    expect(csp).not.toContain("ws://127.0.0.1:*");
   });
 
   it("main.rs exists and delegates to app_lib::run()", () => {

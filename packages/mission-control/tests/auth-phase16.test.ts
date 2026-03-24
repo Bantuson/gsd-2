@@ -468,10 +468,14 @@ describe("GAP: saveApiKey — behavioral return in fetch-fail env", () => {
 // ---------------------------------------------------------------------------
 
 describe("GAP: server/auth-api.ts — validation error messages and timeout values", () => {
-  test("server returns 400 with 'provider required' when login body is missing provider", () => {
+  test("server returns 400 with generic error when login body is missing provider (B63: generic auth errors)", () => {
+    // Phase 20.2.5 B63 remediation: auth errors are now generic ("Authentication failed")
+    // to prevent information leakage about auth flow internals.
     const content = readFileSync(src("server/auth-api.ts"), "utf-8");
-    expect(content).toContain("provider required");
+    // The status 400 is still used for missing provider
     expect(content).toContain("status: 400");
+    // Error message is now generic — no specific "provider required" leak
+    expect(content).toContain("Authentication failed");
   });
 
   test("server returns 400 with validation error for /api/auth/code missing fields", () => {
@@ -500,10 +504,14 @@ describe("GAP: server/auth-api.ts — validation error messages and timeout valu
     expect(content).toContain("15_000");
   });
 
-  test("server returns 504 when auth provider fails to emit first event within timeout", () => {
+  test("server returns 504 when auth provider fails to emit first event within timeout (B63: generic error)", () => {
+    // Phase 20.2.5 B63 remediation: auth error messages are now generic ("Authentication failed")
+    // The 504 status is preserved but the specific timeout message is no longer leaked.
     const content = readFileSync(src("server/auth-api.ts"), "utf-8");
-    expect(content).toContain("Auth flow timed out waiting for provider");
+    // Status 504 still returned for timeout
     expect(content).toContain("status: 504");
+    // Error message is now generic — specific timeout reason is not exposed
+    expect(content).toContain("Authentication failed");
   });
 
   test("server cleans up sessions after 60 seconds via setTimeout", () => {
@@ -756,9 +764,13 @@ describe("GAP: App.tsx — re-connect heading and authenticated+trust-checking n
     expect(content).toContain("setTrustStatus");
   });
 
-  test("App.tsx fails open on trust-status network error (does not block app)", () => {
+  test("App.tsx fails CLOSED on trust-status network error (B73: fail-closed, does NOT grant trust)", () => {
+    // Phase 20.2.5 B73 remediation: App.tsx catch block now sets "needs_trust" (fail-closed)
+    // The old fail-open pattern .catch(() => setTrustStatus("trusted")) has been removed.
     const content = readFileSync(src("App.tsx"), "utf-8");
-    // .catch(() => setTrustStatus("trusted"))
-    expect(content).toContain('.catch(() => setTrustStatus("trusted"))');
+    // Must NOT have the fail-open pattern
+    expect(content).not.toContain('.catch(() => setTrustStatus("trusted"))');
+    // Must fail closed: network error → needs_trust (not trusted)
+    expect(content).toContain('setTrustStatus("needs_trust")');
   });
 });
