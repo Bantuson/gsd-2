@@ -64,7 +64,8 @@ describe("T-EXEC-01 — Process Spawning Safety", () => {
     // git-api.ts uses execFile with array args — injection not possible
     const res = await makeRequest(
       server.baseUrl,
-      "/api/git/log?limit=abc"
+      "/api/git/log?limit=abc",
+      { token: server.token }
     );
 
     // Must not crash (500) — execFile with array args handles bad input gracefully

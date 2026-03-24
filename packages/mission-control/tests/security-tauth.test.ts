@@ -47,16 +47,15 @@ describe("T-AUTH-01 — Authentication Enforcement", () => {
   });
 
   it("B51: WebSocket upgrade is rejected without a per-launch auth token", async () => {
-    // B51 RED PHASE: ws-server.ts explicitly documents "No authentication on WebSocket connections"
-    // First register a window to get a WS port (may itself fail once B50 is implemented)
+    // Register a window WITH the valid token to get a WS port
     const regRes = await makeRequest(server.baseUrl, "/api/window/register", {
       method: "POST",
       body: JSON.stringify({ windowId: `b51-test-${Date.now()}` }),
+      token: server.token,
     });
 
     if (regRes.status !== 200) {
-      // If registration requires auth (B50), WS test can't proceed yet — RED as expected
-      throw new Error(`B51: window registration returned ${regRes.status} — cannot test WS auth until B50 is implemented`);
+      throw new Error(`B51: window registration returned ${regRes.status}`);
     }
 
     const regBody = await regRes.json() as { wsPort?: number };
@@ -135,26 +134,22 @@ describe("T-AUTH-01 — Authentication Enforcement", () => {
   });
 
   it("B54: window IDs registered without a client-supplied ID use crypto.randomUUID format", async () => {
-    // B54 RED PHASE: window-identity.ts uses Math.random().toString(36) for window IDs.
-    // server.ts /api/window/register requires a windowId in the body — test what happens
-    // when no windowId is provided (server-generated ID must be UUID format).
+    // B54: server.ts generates a crypto.randomUUID() when no windowId is provided.
+    // The response must include a windowId in UUID format.
     const res = await makeRequest(server.baseUrl, "/api/window/register", {
       method: "POST",
-      body: JSON.stringify({}), // no windowId — server must generate one
+      body: JSON.stringify({}), // no windowId — server must generate one using crypto.randomUUID()
+      token: server.token,
     });
 
-    if (res.status === 200) {
-      const body = await res.json() as { windowId?: string; wsPort?: number };
-      if (body.windowId) {
-        // Must be a UUID format — NOT a Math.random().toString(36) string
-        expect(body.windowId).toMatch(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-        );
-      }
-    } else {
-      // Currently server.ts returns 400 when windowId is missing — this is the RED state
-      // B54 RED: server requires client-supplied windowId, so server-side UUID gen is not tested
-      expect(res.status).toBe(400); // documents current (failing) state
+    expect(res.status, "B54: window register without windowId must succeed (server generates UUID)").toBe(200);
+    const body = await res.json() as { windowId?: string; wsPort?: number };
+    expect(body.windowId, "B54: server-generated windowId must be present").toBeTruthy();
+    if (body.windowId) {
+      // Must be a UUID v4 format — NOT a Math.random().toString(36) string
+      expect(body.windowId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+      );
     }
   });
 

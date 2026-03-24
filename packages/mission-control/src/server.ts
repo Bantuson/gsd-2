@@ -25,6 +25,17 @@ const publicDir = resolve(import.meta.dir, "../public");
 
 const HTTP_PORT = parseInt(process.env.MC_PORT ?? "4200", 10);
 
+/**
+ * T-AUTH-01 B50/B53: Per-launch secret token generated using crypto.randomUUID().
+ * This token must be presented as Authorization: Bearer <token> on all /api/* requests.
+ * The token is exposed ONCE via /api/auth/startup-token for the Tauri frontend to retrieve.
+ * After first retrieval, it is not exposed again.
+ */
+export const LAUNCH_TOKEN = crypto.randomUUID();
+
+/** Whether the startup token has been retrieved. After retrieval, the endpoint is locked. */
+let startupTokenRetrieved = false;
+
 // Free the HTTP port — WS ports are freed per-window as pipelines are created
 await freePort(HTTP_PORT);
 
@@ -58,6 +69,7 @@ async function registerWindow(windowId: string): Promise<number> {
   const pipeline = await startPipeline({
     planningDir: resolve(repoRoot, ".gsd"),
     wsPort: actualWsPort,
+    launchToken: LAUNCH_TOKEN,
   });
   windowPipelines.set(windowId, pipeline);
   console.log(`[server] Window ${windowId} registered — pipeline on WS :${actualWsPort}`);
@@ -65,16 +77,6 @@ async function registerWindow(windowId: string): Promise<number> {
 }
 
 
-// SECURITY NOTE — Intentional: No authentication on HTTP API endpoints.
-//
-// This is an accepted design decision for a desktop application:
-// 1. The server binds to 127.0.0.1 only (hostname below) — not accessible from the network
-// 2. The local-process threat (any process on the machine can make HTTP requests) is an
-//    accepted risk for a single-user desktop app where the user controls all local processes
-// 3. CORS headers restrict browser-based cross-origin access to the server's own origin
-//
-// If Mission Control ever becomes a multi-user or network-accessible service,
-// HTTP authentication (e.g., bearer token, session cookie) would be required.
 // T-NET-01 B37: Allowed Host headers for DNS rebinding prevention
 const ALLOWED_HOSTS = new Set([
   `127.0.0.1:${HTTP_PORT}`,
@@ -115,6 +117,68 @@ const server = Bun.serve({
       });
     }
 
+    // T-AUTH-01: Single-use startup token endpoint
+    // Called by the Tauri frontend immediately after WebView loads.
+    // Locked after first successful retrieval to prevent replay.
+    if (pathname === "/api/auth/startup-token" && req.method === "GET") {
+      const origin = req.headers.get("origin") ?? "";
+      if (!origin.startsWith("tauri://") && !origin.startsWith("file://") && origin !== "") {
+        return new Response(JSON.stringify({ error: "Forbidden" }), { status: 403, headers: { "Content-Type": "application/json" } });
+      }
+      if (startupTokenRetrieved) {
+        return new Response(JSON.stringify({ error: "Token already retrieved" }), { status: 403, headers: { "Content-Type": "application/json" } });
+      }
+      startupTokenRetrieved = true;
+      return new Response(JSON.stringify({ token: LAUNCH_TOKEN }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    // T-AUTH-01 B56: CORS preflight MUST be handled before route handlers
+    if (req.method === "OPTIONS") {
+      const origin = req.headers.get("origin") ?? "";
+      const allowedOrigins = new Set(["tauri://localhost", "file://"]);
+      const originAllowed = [...allowedOrigins].some(o => origin.startsWith(o)) || origin === "";
+      return new Response(null, {
+        status: originAllowed ? 204 : 403,
+        headers: {
+          "Access-Control-Allow-Origin": originAllowed ? origin : "",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Window-Id",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+
+    // T-AUTH-01 B50: Token validation for all API routes
+    // T-AUTH-01 B55: Origin validation for all API routes
+    if (pathname.startsWith("/api/") && pathname !== "/api/auth/startup-token") {
+      const authHeader = req.headers.get("authorization") ?? "";
+      const providedToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+
+      // B55: Validate Origin — must be tauri://, file://, or absent (same-origin IPC)
+      const origin = req.headers.get("origin") ?? "";
+      const originOk = origin === "" || origin.startsWith("tauri://") || origin.startsWith("file://");
+
+      // B50: Validate token
+      const tokenOk = providedToken === LAUNCH_TOKEN;
+
+      if (!originOk) {
+        return new Response(JSON.stringify({ error: "Forbidden" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      if (!tokenOk) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Route /api/auth/* to auth handler
     if (pathname.startsWith("/api/auth/")) {
       const response = await handleAuthRequest(req, url);
@@ -125,11 +189,10 @@ const server = Bun.serve({
     if (pathname === "/api/window/register" && req.method === "POST") {
       try {
         const body = await req.json() as { windowId?: string };
-        if (!body.windowId) {
-          return addCorsHeaders(Response.json({ error: "windowId required" }, { status: 400 }));
-        }
-        const wsPort = await registerWindow(body.windowId);
-        return addCorsHeaders(Response.json({ wsPort }));
+        // B54: If no windowId provided, generate one using crypto.randomUUID()
+        const windowId = body.windowId ?? crypto.randomUUID();
+        const wsPort = await registerWindow(windowId);
+        return addCorsHeaders(Response.json({ wsPort, windowId }));
       } catch (err: any) {
         return addCorsHeaders(Response.json({ error: err.message }, { status: 500 }));
       }
@@ -338,11 +401,6 @@ const server = Bun.serve({
       }
     }
 
-    // Handle CORS preflight for API routes
-    if (req.method === "OPTIONS" && pathname.startsWith("/api/")) {
-      return addCorsHeaders(new Response(null, { status: 204 }));
-    }
-
     // Serve static files from public/ directory (assets, fonts, etc.)
     if (req.method === "GET" && !pathname.startsWith("/api/")) {
       const filePath = resolve(publicDir, pathname.slice(1));
@@ -380,6 +438,6 @@ function addCorsHeaders(response: Response): Response {
   const headers = new Headers(response.headers);
   headers.set("Access-Control-Allow-Origin", `http://127.0.0.1:${HTTP_PORT}`);
   headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  headers.set("Access-Control-Allow-Headers", "Content-Type, X-Window-Id");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Window-Id");
   return new Response(response.body, { status: response.status, headers });
 }

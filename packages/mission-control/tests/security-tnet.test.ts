@@ -37,7 +37,7 @@ describe("T-NET-01 — Proxy SSRF Prevention", () => {
     const res = await makeRequest(
       server.baseUrl,
       "/api/preview?target=https://evil.com/steal",
-      { method: "GET" }
+      { method: "GET", token: server.token }
     );
     expect(res.status).toBe(403);
   });
@@ -47,7 +47,7 @@ describe("T-NET-01 — Proxy SSRF Prevention", () => {
     const res = await makeRequest(
       server.baseUrl,
       "/api/preview?target=https://api.anthropic.com:8080/v1",
-      { method: "GET" }
+      { method: "GET", token: server.token }
     );
     expect(res.status).toBe(403);
   });
@@ -56,7 +56,7 @@ describe("T-NET-01 — Proxy SSRF Prevention", () => {
     const res = await makeRequest(
       server.baseUrl,
       "/api/preview?target=http://127.0.0.1:5432",
-      { method: "GET" }
+      { method: "GET", token: server.token }
     );
     expect(res.status).toBe(403);
   });
@@ -65,7 +65,7 @@ describe("T-NET-01 — Proxy SSRF Prevention", () => {
     const res = await makeRequest(
       server.baseUrl,
       "/api/preview?target=http://127.0.0.1:4001",
-      { method: "GET" }
+      { method: "GET", token: server.token }
     );
     expect(res.status).toBe(403);
   });
@@ -85,10 +85,11 @@ describe("T-NET-01 — Host and Origin Validation", () => {
   });
 
   it("B38: WebSocket upgrade with Origin: http://evil.com is rejected", async () => {
-    // Register a window to get a WS port
+    // Register a window to get a WS port (requires auth token after B50)
     const regRes = await makeRequest(server.baseUrl, "/api/window/register", {
       method: "POST",
       body: JSON.stringify({ windowId: `b38-test-${Date.now()}` }),
+      token: server.token,
     });
     const regBody = await regRes.json() as { wsPort?: number; error?: string };
     // If registration failed (no auth yet), skip WS test with a note
