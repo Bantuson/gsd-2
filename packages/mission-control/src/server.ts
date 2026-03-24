@@ -51,14 +51,16 @@ async function registerWindow(windowId: string): Promise<number> {
   }
   const wsPort = nextWsPort++;
   windowWsPorts.set(windowId, wsPort);
-  await freePort(wsPort);
+  // Use the returned port (may differ if original port was persistently busy)
+  const actualWsPort = await freePort(wsPort);
+  windowWsPorts.set(windowId, actualWsPort);
   const pipeline = await startPipeline({
     planningDir: resolve(repoRoot, ".gsd"),
-    wsPort,
+    wsPort: actualWsPort,
   });
   windowPipelines.set(windowId, pipeline);
-  console.log(`[server] Window ${windowId} registered — pipeline on WS :${wsPort}`);
-  return wsPort;
+  console.log(`[server] Window ${windowId} registered — pipeline on WS :${actualWsPort}`);
+  return actualWsPort;
 }
 
 
