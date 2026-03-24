@@ -122,16 +122,15 @@ export function createNdjsonParser(onEvent: (event: StreamEvent) => void): Ndjso
 
   return {
     push(chunk: string) {
-      buffer += chunk;
-
-      // T-NET-02 B42: If the buffer grows beyond the line length cap without a newline,
-      // throw to prevent memory exhaustion from pathological provider responses.
-      if (buffer.length > MAX_LINE_LENGTH && !buffer.includes("\n")) {
+      // T-NET-02 B42: Check BEFORE concatenation so the large allocation never occurs.
+      // A single oversized chunk must not be appended to the buffer first.
+      if (buffer.length + chunk.length > MAX_LINE_LENGTH && !chunk.includes("\n")) {
         buffer = "";
         throw new Error(
           `[ndjson-parser] NDJSON line exceeded maximum length (${MAX_LINE_LENGTH} bytes) — stream aborted`
         );
       }
+      buffer += chunk;
 
       const lines = buffer.split("\n");
       // Last element is either empty (if chunk ended with \n) or an incomplete line
