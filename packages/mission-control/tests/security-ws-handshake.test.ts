@@ -117,7 +117,7 @@ describe("GAP-3: WS first-message auth handshake", () => {
     expect(closeCode).toBe(4001);
   });
 
-  it("connection without auth message times out with 4001 after ~5 seconds", async () => {
+  it("connection without auth message times out with 4001 after ~1 second", async () => {
     const port = BASE_PORT + 3;
     makeServer(port, TEST_TOKEN);
 
@@ -126,20 +126,20 @@ describe("GAP-3: WS first-message auth handshake", () => {
     const startTime = Date.now();
 
     await new Promise<void>((resolve) => {
-      // Do NOT send any message — wait for the server's 5-second timeout
+      // Do NOT send any message — wait for the server's 1-second auth timeout
       ws.onclose = (e: CloseEvent) => {
         closeCode = e.code;
         resolve();
       };
-      setTimeout(resolve, 8000); // Safety timeout
+      setTimeout(resolve, 4000); // Safety timeout
     });
 
     const elapsed = Date.now() - startTime;
     expect(closeCode).toBe(4001);
-    // Should take approximately 5 seconds (allow 4-7 second window for system variance)
-    expect(elapsed).toBeGreaterThan(4000);
-    expect(elapsed).toBeLessThan(7500);
-  }, 10000);
+    // Server auth timeout is 1s — allow 500ms-3500ms window for system variance
+    expect(elapsed).toBeGreaterThan(500);
+    expect(elapsed).toBeLessThan(3500);
+  }, 5000);
 
   it("no state is sent before authentication", async () => {
     const port = BASE_PORT + 4;
