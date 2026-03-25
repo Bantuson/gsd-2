@@ -1,6 +1,6 @@
 {
   "name": "@gsd/pi-coding-agent",
-  "version": "2.30.0",
+  "version": "2.38.0",
   "description": "Coding agent CLI (vendored from pi-mono)",
   "type": "module",
   "piConfig": {
@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./auth-storage": {
+      "types": "./dist/core/auth-storage.d.ts",
+      "import": "./dist/core/auth-storage.js"
     }
   },
   "scripts": {

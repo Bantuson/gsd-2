@@ -18,6 +18,7 @@ import type {
   ParallelConfig,
   CompressionStrategy,
   ContextSelectionMode,
+  ReactiveExecutionConfig,
 } from "./types.js";
 import type { DynamicRoutingConfig } from "./model-router.js";
 
@@ -34,7 +35,6 @@ export const MODE_DEFAULTS: Record<WorkflowMode, Partial<GSDPreferences>> = {
       pre_merge_check: false,
       merge_strategy: "squash",
       isolation: "worktree",
-      commit_docs: true,
     },
     unique_milestone_ids: false,
   },
@@ -45,7 +45,6 @@ export const MODE_DEFAULTS: Record<WorkflowMode, Partial<GSDPreferences>> = {
       pre_merge_check: true,
       merge_strategy: "squash",
       isolation: "worktree",
-      commit_docs: true,
     },
     unique_milestone_ids: true,
   },
@@ -70,6 +69,7 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "budget_enforcement",
   "context_pause_threshold",
   "notifications",
+  "cmux",
   "remote_questions",
   "git",
   "post_unit_hooks",
@@ -86,7 +86,17 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "search_provider",
   "compression_strategy",
   "context_selection",
+  "widget_mode",
+  "reactive_execution",
 ]);
+
+/** Canonical list of all dispatch unit types. */
+export const KNOWN_UNIT_TYPES = [
+  "research-milestone", "plan-milestone", "research-slice", "plan-slice",
+  "execute-task", "reactive-execute", "complete-slice", "replan-slice", "reassess-roadmap",
+  "run-uat", "complete-milestone",
+] as const;
+export type UnitType = (typeof KNOWN_UNIT_TYPES)[number];
 
 export const SKILL_ACTIONS = new Set(["use", "prefer", "avoid"]);
 
@@ -158,6 +168,14 @@ export interface RemoteQuestionsConfig {
   poll_interval_seconds?: number;  // clamped to 2-30
 }
 
+export interface CmuxPreferences {
+  enabled?: boolean;
+  notifications?: boolean;
+  sidebar?: boolean;
+  splits?: boolean;
+  browser?: boolean;
+}
+
 export interface GSDPreferences {
   version?: number;
   mode?: WorkflowMode;
@@ -176,6 +194,7 @@ export interface GSDPreferences {
   budget_enforcement?: BudgetEnforcementMode;
   context_pause_threshold?: number;
   notifications?: NotificationPreferences;
+  cmux?: CmuxPreferences;
   remote_questions?: RemoteQuestionsConfig;
   git?: GitPreferences;
   post_unit_hooks?: PostUnitHookConfig[];
@@ -196,6 +215,10 @@ export interface GSDPreferences {
   compression_strategy?: CompressionStrategy;
   /** Context selection mode for file inlining. "full" inlines entire files, "smart" uses semantic chunking. Default derived from token profile. */
   context_selection?: ContextSelectionMode;
+  /** Default widget display mode for auto-mode dashboard. "full" | "small" | "min" | "off". Default: "full". */
+  widget_mode?: "full" | "small" | "min" | "off";
+  /** Reactive (graph-derived parallel) task execution within slices. Disabled by default. */
+  reactive_execution?: ReactiveExecutionConfig;
 }
 
 export interface LoadedGSDPreferences {

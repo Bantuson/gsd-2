@@ -15,6 +15,7 @@ import type {
   Summary, SummaryFrontmatter, SummaryRequires, FileModified,
   Continue, ContinueFrontmatter, ContinueStatus,
   RequirementCounts,
+  TaskIO,
   SecretsManifest, SecretsManifestEntry, SecretsManifestEntryStatus,
   ManifestStatus,
 } from './types.js';
@@ -590,7 +591,8 @@ export async function loadFile(path: string): Promise<string | null> {
   try {
     return await fs.readFile(path, 'utf-8');
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'EISDIR') return null;
     throw err;
   }
 }
@@ -723,6 +725,50 @@ export function countMustHavesMentionedInSummary(
   return count;
 }
 
+// ─── Task Plan IO Extractor ────────────────────────────────────────────────
+
+/**
+ * Extract input and output file paths from a task plan's `## Inputs` and
+ * `## Expected Output` sections. Looks for backtick-wrapped file paths on
+ * each line (e.g. `` `src/foo.ts` ``).
+ *
+ * Returns empty arrays for missing/empty sections — callers should treat
+ * tasks with no IO as ambiguous (sequential fallback trigger).
+ */
+export function parseTaskPlanIO(content: string): { inputFiles: string[]; outputFiles: string[] } {
+  const backtickPathRegex = /`([^`]+)`/g;
+
+  function extractPaths(sectionText: string | null): string[] {
+    if (!sectionText) return [];
+    const paths: string[] = [];
+    for (const line of sectionText.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      let match: RegExpExecArray | null;
+      backtickPathRegex.lastIndex = 0;
+      while ((match = backtickPathRegex.exec(trimmed)) !== null) {
+        const candidate = match[1];
+        // Filter out things that look like code tokens rather than file paths
+        // (e.g. `true`, `false`, `npm run test`). A file path has at least one
+        // dot or slash.
+        if (candidate.includes("/") || candidate.includes(".")) {
+          paths.push(candidate);
+        }
+      }
+    }
+    return paths;
+  }
+
+  const [, body] = splitFrontmatter(content);
+  const inputSection = extractSection(body, "Inputs");
+  const outputSection = extractSection(body, "Expected Output");
+
+  return {
+    inputFiles: extractPaths(inputSection),
+    outputFiles: extractPaths(outputSection),
+  };
+}
+
 // ─── UAT Type Extractor ────────────────────────────────────────────────────
 
 /**
@@ -804,7 +850,7 @@ export async function inlinePriorMilestoneSummary(mid: string, base: string): Pr
  * file not on disk) - callers can distinguish "no manifest" from "empty manifest".
  */
 export async function getManifestStatus(
-  base: string, milestoneId: string,
+  base: string, milestoneId: string, projectRoot?: string,
 ): Promise<ManifestStatus | null> {
   const resolvedPath = resolveMilestoneFile(base, milestoneId, 'SECRETS');
   if (!resolvedPath) return null;
@@ -814,8 +860,17 @@ export async function getManifestStatus(
 
   const manifest = parseSecretsManifest(content);
   const keys = manifest.entries.map(e => e.key);
+
+  // Check both the base path .env AND the project root .env (#1387).
+  // In worktree mode, base is the worktree path which may not have .env.
+  // The project root's .env is where the user actually defined their keys.
   const existingKeys = await checkExistingEnvKeys(keys, resolve(base, '.env'));
   const existingSet = new Set(existingKeys);
+
+  if (projectRoot && projectRoot !== base) {
+    const rootKeys = await checkExistingEnvKeys(keys, resolve(projectRoot, '.env'));
+    for (const k of rootKeys) existingSet.add(k);
+  }
 
   const result: ManifestStatus = {
     pending: [],

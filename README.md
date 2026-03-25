@@ -16,7 +16,7 @@ This version is different. GSD is now a standalone CLI built on the [Pi SDK](htt
 
 One command. Walk away. Come back to a built project with clean git history.
 
-<pre><code>npm install -g gsd-pi</code></pre>
+<pre><code>npm install -g gsd-pi@latest</code></pre>
 
 > **📋 NOTICE: New to Node on Mac?** If you installed Node.js via Homebrew, you may be running a development release instead of LTS. **[Read this guide](./docs/node-lts-macos.md)** to pin Node 24 LTS and avoid compatibility issues.
 
@@ -24,21 +24,19 @@ One command. Walk away. Come back to a built project with clean git history.
 
 ---
 
-## What's New in v2.29
+## What's New in v2.37
 
-- **Node.js 24 LTS** — CI, Docker, and package config all upgraded to Node 24 (Krypton)
-- **`searchExcludeDirs` setting** — blacklist directories from `@` file autocomplete (e.g., `node_modules`, `dist`)
-- **Automated releases** — prod-release now auto-generates changelogs, bumps versions, and publishes to npm
-- **`/gsd logs`** — browse activity, debug, and metrics logs from within a session
-- **Configurable screenshots** — browser-tools now support custom resolution, format, and quality
-- **Pre-commit secret scanning** — automatic detection of hardcoded secrets in CI and locally
-- **Per-project MCP config** — `.gsd/mcp.json` for project-scoped MCP server definitions
-- **API request metrics** — track request counts for Copilot/subscription users
-- **`/gsd keys`** — full API key lifecycle management (list, add, remove, test, rotate, doctor)
-- **Advisory verification gate** — auto-discovered checks (lint/test from package.json) no longer doom-loop on pre-existing errors
-- **Worktree living doc sync** — DECISIONS, REQUIREMENTS, PROJECT, and KNOWLEDGE now sync between worktree and project root
-- **Windows non-ASCII path support** — `cpSync` fallback for usernames with special characters
-- **`needs-discussion` routing** — milestones with draft context now route to the interactive discussion flow instead of stopping
+- **cmux integration** — sidebar status, progress bars, and notifications for [cmux](https://cmux.com) terminal multiplexer users
+- **Redesigned dashboard** — two-column layout with redesigned widget
+- **Search budget enforcement** — session-level search budget prevents unbounded native web search
+- **AGENTS.md support** — deprecated `agent-instructions.md` in favor of standard `AGENTS.md` / `CLAUDE.md`
+- **AI-powered triage** — automated issue and PR triage via Claude Haiku
+- **Auto-generated OpenRouter registry** — model registry built from OpenRouter API for always-current model support
+- **Extension manifest system** — user-managed enable/disable for bundled extensions
+- **Pipeline simplification (ADR-003)** — merged research into planning, mechanical completion
+- **Workflow templates** — right-sized workflows for every task type
+- **Health widget** — always-on environment health checks with progress scoring
+- **`/gsd changelog`** — LLM-summarized release notes for any version
 
 See the full [Changelog](./CHANGELOG.md) for details.
 
@@ -51,7 +49,7 @@ Full documentation is available in the [`docs/`](./docs/) directory:
 - **[Getting Started](./docs/getting-started.md)** — install, first run, basic usage
 - **[Auto Mode](./docs/auto-mode.md)** — autonomous execution deep-dive
 - **[Configuration](./docs/configuration.md)** — all preferences, models, git, and hooks
-- **[Token Optimization](./docs/token-optimization.md)** — profiles, context compression, complexity routing (v2.17)
+- **[Token Optimization](./docs/token-optimization.md)** — profiles, context compression, complexity routing
 - **[Cost Management](./docs/cost-management.md)** — budgets, tracking, projections
 - **[Git Strategy](./docs/git-strategy.md)** — worktree isolation, branching, merge behavior
 - **[Parallel Orchestration](./docs/parallel-orchestration.md)** — run multiple milestones simultaneously
@@ -65,6 +63,7 @@ Full documentation is available in the [`docs/`](./docs/) directory:
 - **[Visualizer](./docs/visualizer.md)** — workflow visualizer with stats and discussion status
 - **[Remote Questions](./docs/remote-questions.md)** — route decisions to Slack or Discord when human input is needed
 - **[Dynamic Model Routing](./docs/dynamic-model-routing.md)** — complexity-based model selection and budget pressure
+- **[Pipeline Simplification (ADR-003)](./docs/ADR-003-pipeline-simplification.md)** — merged research into planning, mechanical completion
 - **[Migration from v1](./docs/migration.md)** — `.planning` → `.gsd` migration
 
 ---
@@ -141,12 +140,12 @@ The iron rule: **a task must fit in one context window.** If it can't, it's two 
 Each slice flows through phases automatically:
 
 ```
-Research → Plan → Execute (per task) → Complete → Reassess Roadmap → Next Slice
-                                                                      ↓ (all slices done)
-                                                              Validate Milestone → Complete Milestone
+Plan (with integrated research) → Execute (per task) → Complete → Reassess Roadmap → Next Slice
+                                                                                      ↓ (all slices done)
+                                                                              Validate Milestone → Complete Milestone
 ```
 
-**Research** scouts the codebase and relevant docs. **Plan** decomposes the slice into tasks with must-haves (mechanically verifiable outcomes). **Execute** runs each task in a fresh context window with only the relevant files pre-loaded — then runs configured verification commands (lint, test, etc.) with auto-fix retries. **Complete** writes the summary, UAT script, marks the roadmap, and commits with meaningful messages derived from task summaries. **Reassess** checks if the roadmap still makes sense given what was learned. **Validate Milestone** runs a reconciliation gate after all slices complete — comparing roadmap success criteria against actual results before sealing the milestone.
+**Plan** scouts the codebase, researches relevant docs, and decomposes the slice into tasks with must-haves (mechanically verifiable outcomes). **Execute** runs each task in a fresh context window with only the relevant files pre-loaded — then runs configured verification commands (lint, test, etc.) with auto-fix retries. **Complete** writes the summary, UAT script, marks the roadmap, and commits with meaningful messages derived from task summaries. **Reassess** checks if the roadmap still makes sense given what was learned. **Validate Milestone** runs a reconciliation gate after all slices complete — comparing roadmap success criteria against actual results before sealing the milestone.
 
 ### `/gsd auto` — The Main Event
 
@@ -326,6 +325,7 @@ On first run, GSD launches a branded setup wizard that walks you through LLM pro
 | `gsd headless [cmd]`    | Run `/gsd` commands without TUI (CI, cron, scripts)             |
 | `gsd headless query`    | Instant JSON snapshot — state, next dispatch, costs (no LLM)    |
 | `gsd --continue` (`-c`) | Resume the most recent session for the current directory        |
+| `gsd --worktree` (`-w`) | Launch an isolated worktree session for the active milestone    |
 | `gsd sessions`          | Interactive session picker — browse and resume any saved session |
 
 ---
@@ -455,15 +455,17 @@ auto_report: true
 
 ### Agent Instructions
 
-Create an `agent-instructions.md` file in your project root to inject persistent per-project behavioral guidance into every agent session. This file is loaded automatically and provides project-specific context the LLM should always have — coding standards, architectural decisions, domain terminology, or workflow preferences.
+Place an `AGENTS.md` file in any directory to provide persistent behavioral guidance for that scope. Pi core loads `AGENTS.md` automatically (with `CLAUDE.md` as a fallback) at both user and project levels. Use these files for coding standards, architectural decisions, domain terminology, or workflow preferences.
+
+> **Note:** The legacy `agent-instructions.md` format (`~/.gsd/agent-instructions.md` and `.gsd/agent-instructions.md`) is deprecated and no longer loaded. Migrate any existing instructions to `AGENTS.md` or `CLAUDE.md`.
 
 ### Debug Mode
 
 Start GSD with `gsd --debug` to enable structured JSONL diagnostic logging. Debug logs capture dispatch decisions, state transitions, and timing data for troubleshooting auto-mode issues.
 
-### Token Optimization (v2.17)
+### Token Optimization
 
-GSD 2.17 introduced a coordinated token optimization system that reduces usage by 40-60% on cost-sensitive workloads. Set a single preference to coordinate model selection, phase skipping, and context compression:
+GSD includes a coordinated token optimization system that reduces usage by 40-60% on cost-sensitive workloads. Set a single preference to coordinate model selection, phase skipping, and context compression:
 
 ```yaml
 token_profile: budget      # or balanced (default), quality
@@ -483,7 +485,7 @@ See the full [Token Optimization Guide](./docs/token-optimization.md) for detail
 
 ### Bundled Tools
 
-GSD ships with 16 extensions, all loaded automatically:
+GSD ships with 19 extensions, all loaded automatically:
 
 | Extension              | What it provides                                                                                                       |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------- |
@@ -493,16 +495,19 @@ GSD ships with 16 extensions, all loaded automatically:
 | **Google Search**      | Gemini-powered web search with AI-synthesized answers                                                                  |
 | **Context7**           | Up-to-date library/framework documentation                                                                             |
 | **Background Shell**   | Long-running process management with readiness detection                                                               |
+| **Async Jobs**         | Background bash commands with job tracking and cancellation                                                            |
 | **Subagent**           | Delegated tasks with isolated context windows                                                                          |
+| **GitHub**             | Full-suite GitHub issues and PR management via `/gh` command                                                           |
 | **Mac Tools**          | macOS native app automation via Accessibility APIs                                                                     |
 | **MCP Client**         | Native MCP server integration via @modelcontextprotocol/sdk                                                            |
 | **Voice**              | Real-time speech-to-text transcription (macOS, Linux — Ubuntu 22.04+)                                                  |
 | **Slash Commands**     | Custom command creation                                                                                                |
-| **LSP**                | Language Server Protocol integration — diagnostics, go-to-definition, references, hover, symbols, rename, code actions |
 | **Ask User Questions** | Structured user input with single/multi-select                                                                         |
 | **Secure Env Collect** | Masked secret collection without manual .env editing                                                                   |
 | **Remote Questions**   | Route decisions to Slack/Discord when human input is needed in headless/CI mode                                         |
 | **Universal Config**   | Discover and import MCP servers and rules from other AI coding tools                                                    |
+| **AWS Auth**           | Automatic Bedrock credential refresh for AWS-hosted models                                                              |
+| **TTSR**               | Tool-use type-safe runtime validation                                                                                   |
 
 ### Bundled Agents
 
@@ -587,7 +592,7 @@ gsd (CLI binary)
           ├─ resource-loader.ts  Syncs bundled extensions + agents to ~/.gsd/agent/
           └─ src/resources/
               ├─ extensions/gsd/    Core GSD extension (auto, state, commands, ...)
-              ├─ extensions/...     12 supporting extensions
+              ├─ extensions/...     18 supporting extensions
               ├─ agents/            scout, researcher, worker
               ├─ AGENTS.md          Agent routing instructions
               └─ GSD-WORKFLOW.md    Manual bootstrap protocol
@@ -624,7 +629,7 @@ GSD isn't locked to one provider. It runs on the [Pi SDK](https://github.com/bad
 
 ### Built-in Providers
 
-Anthropic, OpenAI, Google (Gemini), OpenRouter, GitHub Copilot, Amazon Bedrock, Azure OpenAI, Google Vertex, Groq, Cerebras, Mistral, xAI, HuggingFace, Vercel AI Gateway, and more.
+Anthropic, Anthropic (Vertex AI), OpenAI, Google (Gemini), OpenRouter, GitHub Copilot, Amazon Bedrock, Azure OpenAI, Google Vertex, Groq, Cerebras, Mistral, xAI, HuggingFace, Vercel AI Gateway, and more.
 
 ### OAuth / Max Plans
 

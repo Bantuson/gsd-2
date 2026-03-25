@@ -32,7 +32,28 @@ export type DoctorIssueCode =
   | "gitignore_missing_patterns"
   | "unresolvable_dependency"
   | "failed_migration"
-  | "broken_symlink";
+  | "broken_symlink"
+  // Environment health checks (#1221)
+  | "env_node_version"
+  | "env_dependencies"
+  | "env_env_file"
+  | "env_port_conflict"
+  | "env_disk_space"
+  | "env_docker"
+  | "env_package_manager"
+  | "env_typescript"
+  | "env_python"
+  | "env_cargo"
+  | "env_go"
+  | "env_git_remote"
+  // Provider / auth checks
+  | "provider_key_missing"
+  | "provider_key_backedoff"
+  // Lock infrastructure checks
+  | "stranded_lock_directory"
+  // Git / worktree integrity checks
+  | "integration_branch_missing"
+  | "worktree_directory_orphaned";
 
 /**
  * Issue codes that represent expected completion-transition states.

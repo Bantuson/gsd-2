@@ -7,8 +7,8 @@
  */
 
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { nativeRmCached } from "./native-git-bridge.js";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { nativeRmCached, nativeLsFiles } from "./native-git-bridge.js";
 import { gsdRoot } from "./paths.js";
 
 /**
@@ -79,15 +79,52 @@ const BASELINE_PATTERNS = [
 ];
 
 /**
- * Ensure basePath/.gitignore contains all baseline patterns.
- * Creates the file if missing; appends only missing lines if it exists.
+ * Check whether `.gsd/` contains files tracked by git.
+ * If so, the project intentionally keeps `.gsd/` in version control
+ * and we must NOT add `.gsd` to `.gitignore` or attempt migration.
+ *
+ * Returns true if git tracks at least one file under `.gsd/`.
+ * Returns false (safe to ignore) if:
+ *   - Not a git repo
+ *   - `.gsd/` is a symlink (external state, should be ignored)
+ *   - `.gsd/` doesn't exist
+ *   - No tracked files found under `.gsd/`
+ */
+export function hasGitTrackedGsdFiles(basePath: string): boolean {
+  const localGsd = join(basePath, ".gsd");
+
+  // If .gsd doesn't exist or is already a symlink, no tracked files concern
+  if (!existsSync(localGsd)) return false;
+  try {
+    if (lstatSync(localGsd).isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
+
+  // Check if git tracks any files under .gsd/
+  try {
+    const tracked = nativeLsFiles(basePath, ".gsd");
+    return tracked.length > 0;
+  } catch {
+    // Not a git repo or git not available — safe to proceed
+    return false;
+  }
+}
+
+/**
+ * Ensure basePath/.gitignore contains baseline ignore patterns.
+ * Creates the file if missing; appends missing patterns.
  * Returns true if the file was created or modified, false if already complete.
  *
- * When `commitDocs` is false, the entire `.gsd/` directory is added to
- * .gitignore instead of individual runtime patterns, keeping all GSD
- * artifacts local-only.
+ * **Safety check:** If `.gsd/` contains git-tracked files (i.e., the project
+ * intentionally keeps `.gsd/` in version control), the `.gsd` ignore pattern
+ * is excluded to prevent data loss. Only the `.gsd` pattern is affected —
+ * all other baseline patterns are still applied normally.
  */
-export function ensureGitignore(basePath: string, options?: { commitDocs?: boolean; manageGitignore?: boolean }): boolean {
+export function ensureGitignore(
+  basePath: string,
+  options?: { manageGitignore?: boolean; commitDocs?: boolean },
+): boolean {
   // If manage_gitignore is explicitly false, do not touch .gitignore at all
   if (options?.manageGitignore === false) return false;
 
@@ -106,8 +143,15 @@ export function ensureGitignore(basePath: string, options?: { commitDocs?: boole
       .filter((l) => l && !l.startsWith("#")),
   );
 
+  // Determine which patterns to apply. If .gsd/ has tracked files,
+  // exclude the ".gsd" pattern to prevent deleting tracked state.
+  const gsdIsTracked = hasGitTrackedGsdFiles(basePath);
+  const patternsToApply = gsdIsTracked
+    ? BASELINE_PATTERNS.filter((p) => p !== ".gsd")
+    : BASELINE_PATTERNS;
+
   // Find patterns not yet present
-  const missing = BASELINE_PATTERNS.filter((p) => !existingLines.has(p));
+  const missing = patternsToApply.filter((p) => !existingLines.has(p));
 
   if (missing.length === 0) return false;
 
@@ -133,6 +177,11 @@ export function ensureGitignore(basePath: string, options?: { commitDocs?: boole
  * already in the index even after .gitignore is updated.
  *
  * Only removes from the index (`--cached`), never from disk. Idempotent.
+ *
+ * Note: These are strictly runtime/ephemeral paths (activity logs, lock files,
+ * metrics, STATE.md). They are always safe to untrack, even when the project
+ * intentionally keeps other `.gsd/` files (like PROJECT.md, milestones/) in
+ * version control.
  */
 export function untrackRuntimeFiles(basePath: string): void {
   const runtimePaths = GSD_RUNTIME_PATTERNS;
@@ -192,7 +241,7 @@ See \`~/.gsd/agent/extensions/gsd/docs/preferences-reference.md\` for full field
 - \`models\`: Model preferences for specific task types
 - \`skill_discovery\`: Automatic skill detection preferences
 - \`auto_supervisor\`: Supervision and gating rules for autonomous modes
-- \`git\`: Git preferences — \`main_branch\` (default branch name for new repos, e.g., "main", "master", "trunk"), \`auto_push\`, \`snapshots\`, \`commit_docs\` (set to \`false\` to keep .gsd/ local-only), etc.
+- \`git\`: Git preferences — \`main_branch\` (default branch name for new repos, e.g., "main", "master", "trunk"), \`auto_push\`, \`snapshots\`, etc.
 
 ## Examples
 
@@ -212,5 +261,4 @@ custom_instructions:
   writeFileSync(preferencesPath, template, "utf-8");
   return true;
 }
-
 

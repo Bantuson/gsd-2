@@ -55,6 +55,55 @@ function formatExecutorConstraints(): string {
   ].join("\n");
 }
 
+function buildSourceFilePaths(
+  base: string,
+  mid: string,
+  sid?: string,
+): string {
+  const paths: string[] = [];
+
+  const projectPath = resolveGsdRootFile(base, "PROJECT");
+  if (existsSync(projectPath)) {
+    paths.push(`- **Project**: \`${relGsdRootFile("PROJECT")}\``);
+  }
+
+  const requirementsPath = resolveGsdRootFile(base, "REQUIREMENTS");
+  if (existsSync(requirementsPath)) {
+    paths.push(`- **Requirements**: \`${relGsdRootFile("REQUIREMENTS")}\``);
+  }
+
+  const decisionsPath = resolveGsdRootFile(base, "DECISIONS");
+  if (existsSync(decisionsPath)) {
+    paths.push(`- **Decisions**: \`${relGsdRootFile("DECISIONS")}\``);
+  }
+
+  const contextPath = resolveMilestoneFile(base, mid, "CONTEXT");
+  if (contextPath) {
+    paths.push(`- **Milestone Context**: \`${relMilestoneFile(base, mid, "CONTEXT")}\``);
+  }
+
+  const roadmapPath = resolveMilestoneFile(base, mid, "ROADMAP");
+  if (roadmapPath) {
+    paths.push(`- **Roadmap**: \`${relMilestoneFile(base, mid, "ROADMAP")}\``);
+  }
+
+  if (sid) {
+    const researchPath = resolveSliceFile(base, mid, sid, "RESEARCH");
+    if (researchPath) {
+      paths.push(`- **Slice Research**: \`${relSliceFile(base, mid, sid, "RESEARCH")}\``);
+    }
+  } else {
+    const researchPath = resolveMilestoneFile(base, mid, "RESEARCH");
+    if (researchPath) {
+      paths.push(`- **Milestone Research**: \`${relMilestoneFile(base, mid, "RESEARCH")}\``);
+    }
+  }
+
+  return paths.length > 0
+    ? paths.join("\n")
+    : "- Use `rg --files` and targeted reads to identify the relevant source files before planning.";
+}
+
 // ─── Inline Helpers ───────────────────────────────────────────────────────
 
 /**
@@ -436,6 +485,41 @@ export async function getPriorTaskSummaryPaths(
     .map(f => `${sRel}/tasks/${f}`);
 }
 
+/**
+ * Get carry-forward summary paths scoped to a task's derived dependencies.
+ *
+ * Instead of all prior tasks (order-based), returns only summaries for task
+ * IDs in `dependsOn`. Used by reactive-execute to give each subagent only
+ * the context it actually needs — not sibling tasks from a parallel batch.
+ *
+ * Falls back to order-based when dependsOn is empty (root tasks still get
+ * any available prior summaries for continuity).
+ */
+export async function getDependencyTaskSummaryPaths(
+  mid: string, sid: string, currentTid: string,
+  dependsOn: string[], base: string,
+): Promise<string[]> {
+  // If no dependencies, fall back to order-based for root tasks
+  if (dependsOn.length === 0) {
+    return getPriorTaskSummaryPaths(mid, sid, currentTid, base);
+  }
+
+  const tDir = resolveTasksDir(base, mid, sid);
+  if (!tDir) return [];
+
+  const summaryFiles = resolveTaskFiles(tDir, "SUMMARY");
+  const sRel = relSlicePath(base, mid, sid);
+  const depSet = new Set(dependsOn.map((d) => d.toUpperCase()));
+
+  return summaryFiles
+    .filter((f) => {
+      // Extract task ID from filename: "T02-SUMMARY.md" → "T02"
+      const tid = f.replace(/-SUMMARY\.md$/i, "").toUpperCase();
+      return depSet.has(tid);
+    })
+    .map((f) => `${sRel}/tasks/${f}`);
+}
+
 // ─── Adaptive Replanning Checks ────────────────────────────────────────────
 
 /**
@@ -468,17 +552,6 @@ export async function checkNeedsReassessment(
   const hasAssessment = !!(assessmentFile && await loadFile(assessmentFile));
 
   if (hasAssessment) return null;
-
-  // Fallback: check the expected path directly via existsSync.
-  // resolveSliceFile relies on directory listing (readdirSync) which may not
-  // reflect a freshly written file in git worktree directories on some
-  // filesystems (observed on macOS APFS). A direct existsSync on the
-  // constructed path bypasses directory listing entirely. (#1112)
-  const sliceDir = resolveSlicePath(base, mid, lastCompleted.id);
-  if (sliceDir) {
-    const directPath = join(sliceDir, `${lastCompleted.id}-ASSESSMENT.md`);
-    if (existsSync(directPath)) return null;
-  }
 
   // Also need a summary to reassess against
   const summaryFile = resolveSliceFile(base, mid, lastCompleted.id, "SUMMARY");
@@ -530,21 +603,11 @@ export async function checkNeedsRunUat(
   const uatContent = await loadFile(uatFile);
   if (!uatContent) return null;
 
-  // If UAT result already exists with a PASS verdict, skip (idempotent).
-  // Non-PASS verdicts (FAIL, surfaced-for-human-review) should block slice
-  // progression — return the slice for re-evaluation (#1231).
+  // If UAT result already exists, skip (idempotent)
   const uatResultFile = resolveSliceFile(base, mid, sid, "UAT-RESULT");
   if (uatResultFile) {
-    const resultContent = await loadFile(uatResultFile);
-    if (resultContent) {
-      const verdictMatch = resultContent.match(/verdict:\s*([\w-]+)/i);
-      const verdict = verdictMatch?.[1]?.toLowerCase();
-      if (verdict === "pass" || verdict === "passed") return null; // PASS — skip
-      // Non-PASS verdict exists — don't re-run UAT, but don't advance either.
-      // Return null here since the UAT already ran; the dispatch table's
-      // complete-slice rule should check the verdict before advancing.
-      // For now, returning the slice signals it still needs attention.
-    }
+    const hasResult = !!(await loadFile(uatResultFile));
+    if (hasResult) return null;
   }
 
   // Classify UAT type; unknown type → treat as human-experience (human review)
@@ -599,18 +662,14 @@ export async function buildPlanMilestonePrompt(mid: string, midTitle: string, ba
   const { inlinePriorMilestoneSummary } = await import("./files.js");
   const priorSummaryInline = await inlinePriorMilestoneSummary(mid, base);
   if (priorSummaryInline) inlined.push(priorSummaryInline);
-  // Build source file paths for the planner to read on demand (reduces inlining)
-  const sourcePaths: string[] = [];
-  if (existsSync(resolveGsdRootFile(base, "PROJECT")))
-    sourcePaths.push(`- **Project**: \`${relGsdRootFile("PROJECT")}\``);
-  if (existsSync(resolveGsdRootFile(base, "REQUIREMENTS")))
-    sourcePaths.push(`- **Requirements**: \`${relGsdRootFile("REQUIREMENTS")}\``);
-  if (existsSync(resolveGsdRootFile(base, "DECISIONS")))
-    sourcePaths.push(`- **Decisions**: \`${relGsdRootFile("DECISIONS")}\``);
-  const sourceFilePaths = sourcePaths.length > 0
-    ? sourcePaths.join("\n")
-    : "_No project/requirements/decisions files found._";
-
+  if (inlineLevel !== "minimal") {
+    const projectInline = await inlineProjectFromDb(base);
+    if (projectInline) inlined.push(projectInline);
+    const requirementsInline = await inlineRequirementsFromDb(base, undefined, inlineLevel);
+    if (requirementsInline) inlined.push(requirementsInline);
+    const decisionsInline = await inlineDecisionsFromDb(base, mid, undefined, inlineLevel);
+    if (decisionsInline) inlined.push(decisionsInline);
+  }
   const knowledgeInlinePM = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
   if (knowledgeInlinePM) inlined.push(knowledgeInlinePM);
   inlined.push(inlineTemplate("roadmap", "Roadmap"));
@@ -628,19 +687,19 @@ export async function buildPlanMilestonePrompt(mid: string, midTitle: string, ba
   const inlinedContext = `## Inlined Context (preloaded — do not re-read these files)\n\n${inlined.join("\n\n---\n\n")}`;
 
   const outputRelPath = relMilestoneFile(base, mid, "ROADMAP");
+  const researchOutputPath = join(base, relMilestoneFile(base, mid, "RESEARCH"));
   const secretsOutputPath = join(base, relMilestoneFile(base, mid, "SECRETS"));
-  const researchOutputRelPath = relMilestoneFile(base, mid, "RESEARCH");
   return loadPrompt("plan-milestone", {
     workingDirectory: base,
     milestoneId: mid, milestoneTitle: midTitle,
     milestonePath: relMilestonePath(base, mid),
     contextPath: contextRel,
     researchPath: researchRel,
+    researchOutputPath,
     outputPath: join(base, outputRelPath),
     secretsOutputPath,
     inlinedContext,
-    sourceFilePaths,
-    researchOutputPath: join(base, researchOutputRelPath),
+    sourceFilePaths: buildSourceFilePaths(base, mid),
     ...buildSkillDiscoveryVars(),
   });
 }
@@ -704,16 +763,12 @@ export async function buildPlanSlicePrompt(
   inlined.push(await inlineFile(roadmapPath, roadmapRel, "Milestone Roadmap"));
   const researchInline = await inlineFileOptional(researchPath, researchRel, "Slice Research");
   if (researchInline) inlined.push(researchInline);
-  // Build source file paths for the planner to read on demand (reduces inlining)
-  const sliceSourcePaths: string[] = [];
-  if (existsSync(resolveGsdRootFile(base, "REQUIREMENTS")))
-    sliceSourcePaths.push(`- **Requirements**: \`${relGsdRootFile("REQUIREMENTS")}\``);
-  if (existsSync(resolveGsdRootFile(base, "DECISIONS")))
-    sliceSourcePaths.push(`- **Decisions**: \`${relGsdRootFile("DECISIONS")}\``);
-  const sliceSourceFilePaths = sliceSourcePaths.length > 0
-    ? sliceSourcePaths.join("\n")
-    : "_No requirements/decisions files found._";
-
+  if (inlineLevel !== "minimal") {
+    const decisionsInline = await inlineDecisionsFromDb(base, mid, undefined, inlineLevel);
+    if (decisionsInline) inlined.push(decisionsInline);
+    const requirementsInline = await inlineRequirementsFromDb(base, sid, inlineLevel);
+    if (requirementsInline) inlined.push(requirementsInline);
+  }
   const knowledgeInlinePS = await inlineGsdRootFile(base, "knowledge.md", "Project Knowledge");
   if (knowledgeInlinePS) inlined.push(knowledgeInlinePS);
   inlined.push(inlineTemplate("plan", "Slice Plan"));
@@ -746,19 +801,30 @@ export async function buildPlanSlicePrompt(
     outputPath: join(base, outputRelPath),
     inlinedContext,
     dependencySummaries: depContent,
+    sourceFilePaths: buildSourceFilePaths(base, mid, sid),
     executorContextConstraints,
     commitInstruction,
-    sourceFilePaths: sliceSourceFilePaths,
   });
+}
+
+/** Options for customizing execute-task prompt construction. */
+export interface ExecuteTaskPromptOptions {
+  level?: InlineLevel;
+  /** Override carry-forward paths (dependency-based instead of order-based). */
+  carryForwardPaths?: string[];
 }
 
 export async function buildExecuteTaskPrompt(
   mid: string, sid: string, sTitle: string,
-  tid: string, tTitle: string, base: string, level?: InlineLevel,
+  tid: string, tTitle: string, base: string,
+  level?: InlineLevel | ExecuteTaskPromptOptions,
 ): Promise<string> {
-  const inlineLevel = level ?? resolveInlineLevel();
+  const opts: ExecuteTaskPromptOptions = typeof level === "object" && level !== null && !Array.isArray(level)
+    ? level
+    : { level: level as InlineLevel | undefined };
+  const inlineLevel = opts.level ?? resolveInlineLevel();
 
-  const priorSummaries = await getPriorTaskSummaryPaths(mid, sid, tid, base);
+  const priorSummaries = opts.carryForwardPaths ?? await getPriorTaskSummaryPaths(mid, sid, tid, base);
   const priorLines = priorSummaries.length > 0
     ? priorSummaries.map(p => `- \`${p}\``).join("\n")
     : "- (no prior tasks)";
@@ -1211,6 +1277,82 @@ export async function buildReassessRoadmapPrompt(
     inlinedContext,
     deferredCaptures,
     commitInstruction: reassessCommitInstruction,
+  });
+}
+
+// ─── Reactive Execute Prompt ──────────────────────────────────────────────
+
+export async function buildReactiveExecutePrompt(
+  mid: string, midTitle: string, sid: string, sTitle: string,
+  readyTaskIds: string[], base: string,
+): Promise<string> {
+  const { loadSliceTaskIO, deriveTaskGraph, graphMetrics } = await import("./reactive-graph.js");
+
+  // Build graph for context
+  const taskIO = await loadSliceTaskIO(base, mid, sid);
+  const graph = deriveTaskGraph(taskIO);
+  const metrics = graphMetrics(graph);
+
+  // Build graph context section
+  const graphLines: string[] = [];
+  for (const node of graph) {
+    const status = node.done ? "✅ done" : readyTaskIds.includes(node.id) ? "🟢 ready" : "⏳ waiting";
+    const deps = node.dependsOn.length > 0 ? ` (depends on: ${node.dependsOn.join(", ")})` : "";
+    graphLines.push(`- **${node.id}: ${node.title}** — ${status}${deps}`);
+    if (node.outputFiles.length > 0) {
+      graphLines.push(`  - Outputs: ${node.outputFiles.map(f => `\`${f}\``).join(", ")}`);
+    }
+  }
+  const graphContext = [
+    `Tasks: ${metrics.taskCount}, Edges: ${metrics.edgeCount}, Ready: ${metrics.readySetSize}`,
+    "",
+    ...graphLines,
+  ].join("\n");
+
+  // Build individual subagent prompts for each ready task
+  const subagentSections: string[] = [];
+  const readyTaskListLines: string[] = [];
+
+  for (const tid of readyTaskIds) {
+    const node = graph.find((n) => n.id === tid);
+    const tTitle = node?.title ?? tid;
+    readyTaskListLines.push(`- **${tid}: ${tTitle}**`);
+
+    // Build dependency-scoped carry-forward paths for this task
+    const depPaths = await getDependencyTaskSummaryPaths(
+      mid, sid, tid, node?.dependsOn ?? [], base,
+    );
+
+    // Build a full execute-task prompt with dependency-based carry-forward
+    const taskPrompt = await buildExecuteTaskPrompt(
+      mid, sid, sTitle, tid, tTitle, base,
+      { carryForwardPaths: depPaths },
+    );
+
+    subagentSections.push([
+      `### ${tid}: ${tTitle}`,
+      "",
+      "Use this as the prompt for a `subagent` call:",
+      "",
+      "```",
+      taskPrompt,
+      "```",
+    ].join("\n"));
+  }
+
+  const inlinedTemplates = inlineTemplate("task-summary", "Task Summary");
+
+  return loadPrompt("reactive-execute", {
+    workingDirectory: base,
+    milestoneId: mid,
+    milestoneTitle: midTitle,
+    sliceId: sid,
+    sliceTitle: sTitle,
+    graphContext,
+    readyTaskCount: String(readyTaskIds.length),
+    readyTaskList: readyTaskListLines.join("\n"),
+    subagentPrompts: subagentSections.join("\n\n---\n\n"),
+    inlinedTemplates,
   });
 }
 
