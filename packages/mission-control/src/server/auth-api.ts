@@ -15,7 +15,7 @@
  *   POST /api/auth/logout         → remove provider credentials
  */
 
-import { AuthStorage } from "@gsd/pi-coding-agent";
+import { AuthStorage } from "@gsd/pi-coding-agent/auth-storage";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
