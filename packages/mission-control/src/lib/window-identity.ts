@@ -57,7 +57,8 @@ export function installFetchMonkeyPatch(): void {
   if (typeof window === "undefined") return;
 
   const originalFetch = window.fetch;
-  window.fetch = async function (input, init) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).fetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     const token = getLaunchToken();
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
 

@@ -440,7 +440,8 @@ const server = Bun.serve({
       if (pipeline && data) {
         try {
           // Emit browser state update with the screenshot (pipeline handles WS broadcast)
-          pipeline.emit?.("browser_state_update", { screenshot: data });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (pipeline as any).emit?.("browser_state_update", { screenshot: data });
         } catch {
           // Non-fatal: pipeline may not have emit — just accept and ignore
         }

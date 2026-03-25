@@ -105,7 +105,8 @@ export function createWsServer(options: WsServerOptions): WsServer {
       const windowId = url.searchParams.get("windowId") || "default";
 
       // GAP-3: Start connection UNAUTHENTICATED — auth happens via first message
-      const upgraded = server.upgrade(req, { data: { windowId, authenticated: !launchToken } });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const upgraded = (server as any).upgrade(req, { data: { windowId, authenticated: !launchToken } });
       if (upgraded) return undefined;
       return new Response("Mission Control WebSocket Server", { status: 200 });
     },

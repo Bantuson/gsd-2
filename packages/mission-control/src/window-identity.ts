@@ -99,7 +99,8 @@ export async function initWindowIdentity(): Promise<void> {
       if (init?.headers) {
         if (init.headers instanceof Headers) {
           // Headers instance: use Object.fromEntries to extract all header pairs
-          existingHeaders = Object.fromEntries(init.headers.entries());
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          existingHeaders = Object.fromEntries((init.headers as any).entries());
         } else if (Array.isArray(init.headers)) {
           // Array form: [["key", "value"], ...]
           for (const [key, value] of init.headers as [string, string][]) {
