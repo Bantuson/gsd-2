@@ -51,6 +51,8 @@ jobs:
         run: |
           bunx tsc -p packages/native/tsconfig.json
           bunx tsc -p packages/pi-ai/tsconfig.json
+          bunx tsc -p packages/pi-agent-core/tsconfig.json
+          bunx tsc -p packages/pi-tui/tsconfig.json
           bunx tsc -p packages/pi-coding-agent/tsconfig.json
 
       - name: TypeScript check
