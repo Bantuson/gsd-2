@@ -63,6 +63,29 @@ function cleanupTestDir() {
   }
 }
 
+/**
+ * Wait for the first WebSocket message matching predicate, ignoring others.
+ * Handles extra pipeline messages (no_project_loaded, session_update) that
+ * arrive after the initial "full" state on every connection.
+ */
+function waitForMessage(
+  ws: WebSocket,
+  predicate: (msg: unknown) => boolean,
+  timeoutMs = 5000
+): Promise<unknown> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), timeoutMs);
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data as string);
+      if (predicate(msg)) {
+        clearTimeout(timer);
+        ws.onmessage = null;
+        resolve(msg);
+      }
+    };
+  });
+}
+
 describe("pipeline", () => {
   let pipeline: Awaited<ReturnType<typeof startPipeline>> | null = null;
 
@@ -88,10 +111,7 @@ describe("pipeline", () => {
 
     // Connect a client and verify it gets full GSD2State
     const ws = new WebSocket("ws://localhost:15001");
-    const msg = await new Promise<any>((resolve) => {
-      ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
-      setTimeout(() => resolve(null), 5000);
-    });
+    const msg = await waitForMessage(ws, (m: any) => m.type === "full") as any;
 
     expect(msg).not.toBeNull();
     expect(msg.type).toBe("full");
@@ -109,23 +129,17 @@ describe("pipeline", () => {
 
     const ws = new WebSocket("ws://localhost:15002");
 
-    // Wait for initial full state
-    await new Promise<void>((resolve) => {
-      ws.onmessage = () => resolve();
-      setTimeout(resolve, 5000);
-    });
+    // Wait for initial full state, ignoring pipeline metadata messages
+    await waitForMessage(ws, (m: any) => m.type === "full");
 
-    // Listen for diff message
-    const diffPromise = new Promise<any>((resolve) => {
-      ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
-      setTimeout(() => resolve(null), 5000);
-    });
+    // Wait for diff after triggering a file change
+    const updatedState = STATE_MD.replace("active_slice: S01", "active_slice: S02");
+    const diffPromise = waitForMessage(ws, (m: any) => m.type === "diff");
 
     // Change STATE.md to trigger watcher
-    const updatedState = STATE_MD.replace("active_slice: S01", "active_slice: S02");
     writeFileSync(join(GSD_DIR, "STATE.md"), updatedState);
 
-    const msg = await diffPromise;
+    const msg = await diffPromise as any;
     expect(msg).not.toBeNull();
     expect(msg.type).toBe("diff");
     expect(msg.changes.projectState).toBeDefined();
@@ -141,20 +155,21 @@ describe("pipeline", () => {
 
     const ws = new WebSocket("ws://localhost:15003");
 
-    // Wait for initial full state
-    await new Promise<void>((resolve) => {
-      ws.onmessage = () => resolve();
-      setTimeout(resolve, 5000);
-    });
+    // Wait for initial full state, ignoring pipeline metadata messages
+    await waitForMessage(ws, (m: any) => m.type === "full");
 
-    // Listen for diff and measure time
+    // Listen for diff and measure time — filter to type === "diff" only
     let writeTime: number;
     const latencyPromise = new Promise<number>((resolve) => {
-      ws.onmessage = () => {
-        const elapsed = Date.now() - writeTime;
-        resolve(elapsed);
+      const timer = setTimeout(() => resolve(-1), 5000);
+      ws.onmessage = (event) => {
+        const m = JSON.parse(event.data as string);
+        if (m.type === "diff") {
+          clearTimeout(timer);
+          ws.onmessage = null;
+          resolve(Date.now() - writeTime);
+        }
       };
-      setTimeout(() => resolve(-1), 5000);
     });
 
     // Write file and record time
@@ -179,15 +194,14 @@ describe("pipeline", () => {
 
     const ws = new WebSocket("ws://localhost:15004");
 
-    // Wait for initial full state
-    await new Promise<void>((resolve) => {
-      ws.onmessage = () => resolve();
-      setTimeout(resolve, 5000);
-    });
+    // Wait for initial full state, ignoring pipeline metadata messages
+    await waitForMessage(ws, (m: any) => m.type === "full");
 
+    // Only count actual diff messages, not pipeline metadata (no_project_loaded, session_update)
     let receivedDiff = false;
-    ws.onmessage = () => {
-      receivedDiff = true;
+    ws.onmessage = (event) => {
+      const m = JSON.parse(event.data as string);
+      if (m.type === "diff") receivedDiff = true;
     };
 
     // Write the SAME content (no change)
@@ -208,23 +222,22 @@ describe("pipeline", () => {
 
     const ws = new WebSocket("ws://localhost:15005");
 
-    // Wait for initial full state
-    await new Promise<void>((resolve) => {
-      ws.onmessage = () => resolve();
-      setTimeout(resolve, 5000);
-    });
+    // Wait for initial full state, ignoring pipeline metadata messages
+    await waitForMessage(ws, (m: any) => m.type === "full");
 
-    const driftPromise = new Promise<any>((resolve) => {
-      ws.onmessage = (event) => resolve(JSON.parse(event.data as string));
-      setTimeout(() => resolve(null), 3000);
-    });
+    // Wait for diff or full showing updated state
+    const driftState = STATE_MD.replace("active_slice: S01", "active_slice: S04");
+    const driftPromise = waitForMessage(
+      ws,
+      (m: any) => m.type === "diff" || m.type === "full",
+      3000
+    );
 
     // Force drift: update STATE.md (watcher may or may not fire,
     // but reconciliation should catch it within 200ms)
-    const driftState = STATE_MD.replace("active_slice: S01", "active_slice: S04");
     writeFileSync(join(GSD_DIR, "STATE.md"), driftState);
 
-    const msg = await driftPromise;
+    const msg = await driftPromise as any;
     expect(msg).not.toBeNull();
     // Should get either a diff or full message showing updated state
     const activeSlice =
