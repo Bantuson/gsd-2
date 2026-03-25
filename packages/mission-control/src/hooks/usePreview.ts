@@ -13,6 +13,8 @@
  * assertions without React renderer — same pattern as shouldPulseOnTaskChange.
  */
 import { useState, useEffect } from "react";
+// GAP-3: Import launchToken for WS first-message auth handshake
+import { launchToken } from "../window-identity";
 
 export type Viewport = "desktop" | "tablet" | "mobile" | "dual";
 
@@ -174,6 +176,13 @@ export function usePreview(wsUrl: string = "ws://localhost:4001"): UsePreviewRet
     function connect() {
       if (cancelled) return;
       ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        // GAP-3: Send auth token as first message for WS first-message handshake
+        if (launchToken) {
+          ws!.send(JSON.stringify({ type: "auth", token: launchToken }));
+        }
+      };
 
       ws.onmessage = (e: MessageEvent) => {
         try {

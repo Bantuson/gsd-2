@@ -18,6 +18,8 @@ import { QuestionCard } from "@/components/chat/QuestionCard";
 import { DecisionLogDrawer } from "@/components/chat/DecisionLogDrawer";
 import { useBuilderMode } from "@/hooks/useBuilderMode";
 import type { ModeEvent, QuestionCardPayload, DecisionEntry, ReviewResults } from "@/server/chat-types";
+// GAP-3: Import launchToken for WS first-message auth handshake
+import { launchToken } from "@/window-identity";
 
 export interface ChatModeState {
   mode: "chat" | "discuss" | "review";
@@ -57,6 +59,13 @@ export function useChatMode(wsUrl: string, onChatSend: (msg: string) => void) {
       if (destroyed) return;
       ws = new WebSocket(wsUrl);
       wsRef.current = ws;
+
+      ws.addEventListener("open", () => {
+        // GAP-3: Send auth token as first message for WS first-message handshake
+        if (launchToken) {
+          ws.send(JSON.stringify({ type: "auth", token: launchToken }));
+        }
+      });
 
       ws.addEventListener("message", (ev: MessageEvent) => {
         try {

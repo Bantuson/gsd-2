@@ -16,6 +16,21 @@ export let windowId: string = "";
 export let wsPort: number = 4001;
 
 /**
+ * GAP-3: Per-launch token for WebSocket first-message auth handshake.
+ * Set during initWindowIdentity() after retrieving from /api/auth/startup-token.
+ * Exported so useReconnectingWebSocket and other WS hooks can send it as first message.
+ */
+export let launchToken: string = "";
+
+/**
+ * GAP-3: Set the launch token for WS first-message handshake.
+ * Can be called by the auth system if it retrieves the token separately.
+ */
+export function setLaunchToken(token: string): void {
+  launchToken = token;
+}
+
+/**
  * Initialize window identity:
  * 1. Get or generate windowId from sessionStorage
  * 2. Register with server to get a dedicated wsPort
@@ -43,6 +58,23 @@ export async function initWindowIdentity(): Promise<void> {
   } catch {
     const cached = sessionStorage.getItem(WS_PORT_KEY);
     wsPort = cached ? parseInt(cached, 10) : 4001;
+  }
+
+  // GAP-3: Retrieve per-launch token for WebSocket first-message handshake.
+  // /api/auth/startup-token is single-use (B53) — fetched once at init.
+  // On subsequent windows the token is already set (module-level singleton).
+  if (!launchToken) {
+    try {
+      const tokenRes = await fetch(`${API_BASE}/api/auth/startup-token`);
+      if (tokenRes.ok) {
+        const tokenData = await tokenRes.json() as { token?: string };
+        if (tokenData.token) {
+          launchToken = tokenData.token;
+        }
+      }
+    } catch {
+      // Token fetch failed — WS will connect without auth (dev/test fallback)
+    }
   }
 
   // Patch global fetch to inject X-Window-Id header for all API calls

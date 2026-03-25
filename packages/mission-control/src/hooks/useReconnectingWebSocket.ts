@@ -9,6 +9,8 @@
  */
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { PlanningState, StateDiff } from "../server/types";
+// GAP-3: Import launchToken for WS first-message auth handshake
+import { launchToken } from "../window-identity";
 
 // -- Pure functions (exported for testing) --
 
@@ -114,6 +116,10 @@ export function useReconnectingWebSocket(
       const wasReconnect = isReconnect(attemptRef.current);
       setStatus("connected");
       attemptRef.current = 0;
+      // GAP-3: Send auth token as first message for WS first-message handshake
+      if (launchToken) {
+        ws.send(JSON.stringify({ type: "auth", token: launchToken }));
+      }
       if (wasReconnect && onReconnectRef.current) {
         onReconnectRef.current();
       }

@@ -4,6 +4,11 @@
  *
  * Clients receive full state on connect, diff-only updates on changes.
  * Supports "refresh" message to re-send full state.
+ *
+ * GAP-3: First-message auth handshake.
+ * When launchToken is configured, connections start UNAUTHENTICATED.
+ * The client must send { type: "auth", token: "<launch-token>" } as the first message.
+ * Server subscribes to topics only after valid auth. Closes with 4001 after 5-second timeout.
  */
 import type { PlanningState, StateDiff } from "./types";
 import type { PermissionResponse } from "./chat-types";
@@ -32,8 +37,9 @@ export interface WsServerOptions {
   /** Called when a new client connects, after initial state is sent. */
   onClientConnect?: (ws: ServerWebSocket) => void;
   /**
-   * T-AUTH-01 B51: Per-launch secret token for WebSocket upgrade validation.
-   * Upgrade requests must supply this token as ?token=<value> or Authorization: Bearer <value>.
+   * T-AUTH-01 B51: Per-launch secret token for WebSocket first-message handshake.
+   * GAP-3: Token is no longer validated on upgrade (URL query string).
+   * Instead, client must send { type: "auth", token: "<value>" } as first message.
    * If omitted, token validation is skipped (for backward compatibility in tests).
    */
   launchToken?: string;
@@ -92,54 +98,103 @@ export function createWsServer(options: WsServerOptions): WsServer {
         });
       }
 
-      // T-AUTH-01 B51: Validate per-launch token on WebSocket upgrade.
-      // Token must be supplied as ?token=<value> or Authorization: Bearer <value>.
-      const url = new URL(req.url);
-      if (launchToken) {
-        const wsToken = url.searchParams.get("token") ??
-          req.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
-        if (wsToken !== launchToken) {
-          return new Response(JSON.stringify({ error: "Unauthorized" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-
       // T-AUTH-01 B52: Extract windowId for per-window topic scoping.
-      // Clients connect via ws://host:port?windowId=<id>&token=<token>
+      // GAP-3: Token is no longer validated on upgrade — moved to first-message handshake.
+      // windowId is not sensitive and remains in the URL for per-window topic routing.
+      const url = new URL(req.url);
       const windowId = url.searchParams.get("windowId") || "default";
 
-      const upgraded = server.upgrade(req, { data: { windowId } });
+      // GAP-3: Start connection UNAUTHENTICATED — auth happens via first message
+      const upgraded = server.upgrade(req, { data: { windowId, authenticated: !launchToken } });
       if (upgraded) return undefined;
       return new Response("Mission Control WebSocket Server", { status: 200 });
     },
     websocket: {
       open(ws: ServerWebSocket) {
-        const wsWindowId = (ws as unknown as { data?: { windowId?: string } }).data?.windowId || "default";
-        ws.subscribe(TOPIC_PREFIX + wsWindowId);
-        ws.subscribe(CHAT_TOPIC);
-        sequence++;
-        const state = getFullState();
-        ws.send(
-          JSON.stringify({
-            type: "full",
-            state,
-            sequence,
-            timestamp: Date.now(),
-          })
-        );
-        // Send custom commands if available (for slash command autocomplete)
-        if (customCommands && customCommands.length > 0) {
-          ws.send(JSON.stringify({ type: "custom_commands", commands: customCommands }));
-        }
-        // Send current session list so client knows activeSessionId immediately
-        if (onClientConnect) {
-          onClientConnect(ws);
+        const wsData = (ws as unknown as { data?: { windowId?: string; authenticated?: boolean } }).data;
+        const wsWindowId = wsData?.windowId || "default";
+
+        if (launchToken) {
+          // GAP-3: Connection starts UNAUTHENTICATED — client must send auth message first.
+          // Set 5-second timeout: close with 4001 if not authenticated in time.
+          const authTimeout = setTimeout(() => {
+            const currentData = (ws as unknown as { data?: { authenticated?: boolean } }).data;
+            if (!currentData?.authenticated) {
+              ws.close(4001, "Authentication timeout");
+            }
+          }, 5000);
+          (ws as unknown as { data: { authTimeout?: ReturnType<typeof setTimeout> } }).data.authTimeout = authTimeout;
+        } else {
+          // No launchToken configured (tests/dev) — auto-authenticate immediately
+          (ws as unknown as { data: { authenticated: boolean } }).data.authenticated = true;
+          ws.subscribe(TOPIC_PREFIX + wsWindowId);
+          ws.subscribe(CHAT_TOPIC);
+          sequence++;
+          const state = getFullState();
+          ws.send(
+            JSON.stringify({
+              type: "full",
+              state,
+              sequence,
+              timestamp: Date.now(),
+            })
+          );
+          // Send custom commands if available (for slash command autocomplete)
+          if (customCommands && customCommands.length > 0) {
+            ws.send(JSON.stringify({ type: "custom_commands", commands: customCommands }));
+          }
+          // Notify that client has connected and received initial state
+          if (onClientConnect) {
+            onClientConnect(ws);
+          }
         }
       },
       message(ws: ServerWebSocket, message: string | Buffer) {
         const msg = typeof message === "string" ? message : message.toString();
+        const wsData = (ws as unknown as { data?: { windowId?: string; authenticated?: boolean; authTimeout?: ReturnType<typeof setTimeout> } }).data;
+
+        // GAP-3: First-message auth handshake — gate all messages until authenticated
+        if (launchToken && !wsData?.authenticated) {
+          try {
+            const parsed = JSON.parse(msg);
+            if (parsed.type === "auth" && parsed.token === launchToken) {
+              // Valid auth — authenticate, clear timeout, subscribe, send full state
+              if (wsData) {
+                wsData.authenticated = true;
+                if (wsData.authTimeout) {
+                  clearTimeout(wsData.authTimeout);
+                  wsData.authTimeout = undefined;
+                }
+              }
+              const wsWindowId = wsData?.windowId || "default";
+              ws.subscribe(TOPIC_PREFIX + wsWindowId);
+              ws.subscribe(CHAT_TOPIC);
+              sequence++;
+              const state = getFullState();
+              ws.send(
+                JSON.stringify({
+                  type: "full",
+                  state,
+                  sequence,
+                  timestamp: Date.now(),
+                })
+              );
+              if (customCommands && customCommands.length > 0) {
+                ws.send(JSON.stringify({ type: "custom_commands", commands: customCommands }));
+              }
+              if (onClientConnect) {
+                onClientConnect(ws);
+              }
+              return;
+            }
+          } catch {
+            // Not valid JSON — fall through to close
+          }
+          // Invalid or missing auth — reject immediately
+          ws.close(4001, "Unauthorized");
+          return;
+        }
+
         if (msg === "refresh") {
           sequence++;
           const state = getFullState();
@@ -180,7 +235,12 @@ export function createWsServer(options: WsServerOptions): WsServer {
         }
       },
       close(ws: ServerWebSocket) {
-        const wsWindowId = (ws as unknown as { data?: { windowId?: string } }).data?.windowId || "default";
+        const wsData = (ws as unknown as { data?: { windowId?: string; authTimeout?: ReturnType<typeof setTimeout> } }).data;
+        const wsWindowId = wsData?.windowId || "default";
+        // GAP-3: Clear auth timeout on disconnect to prevent close-after-close
+        if (wsData?.authTimeout) {
+          clearTimeout(wsData.authTimeout);
+        }
         ws.unsubscribe(TOPIC_PREFIX + wsWindowId);
         ws.unsubscribe(CHAT_TOPIC);
       },
