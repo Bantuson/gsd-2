@@ -155,14 +155,18 @@ describe("T-EXEC-02 — XSS to IPC Chain Prevention", () => {
       "utf8"
     );
 
-    // RED: These components use dangerouslySetInnerHTML without DOMPurify
-    // They must call DOMPurify.sanitize() on marked.parse() output
+    // Components must sanitize HTML before dangerouslySetInnerHTML.
+    // Accept either direct DOMPurify.sanitize() call or the sanitizeHtml wrapper
+    // (lib/sanitize-html.ts), which calls DOMPurify.sanitize() internally.
+    const sanitizesHtml = (src: string) =>
+      src.includes("DOMPurify.sanitize") || src.includes("sanitizeHtml");
+
     if (ceSrc.includes("dangerouslySetInnerHTML")) {
-      expect(ceSrc).toContain("DOMPurify.sanitize");
+      expect(sanitizesHtml(ceSrc)).toBe(true);
     }
 
     if (irpSrc.includes("dangerouslySetInnerHTML")) {
-      expect(irpSrc).toContain("DOMPurify.sanitize");
+      expect(sanitizesHtml(irpSrc)).toBe(true);
     }
 
     // At least one uses dangerouslySetInnerHTML (test is meaningful)

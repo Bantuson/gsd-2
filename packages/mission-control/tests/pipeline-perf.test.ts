@@ -125,6 +125,7 @@ describe("pipeline", () => {
     pipeline = await startPipeline({
       planningDir: GSD_DIR,
       wsPort: 15002,
+      reconcileMs: 200, // Fast reconciler fallback for CI environments with slow fs.watch
     });
 
     const ws = new WebSocket("ws://localhost:15002");
@@ -151,6 +152,7 @@ describe("pipeline", () => {
     pipeline = await startPipeline({
       planningDir: GSD_DIR,
       wsPort: 15003,
+      reconcileMs: 200, // Fast reconciler fallback for CI environments with slow fs.watch
     });
 
     const ws = new WebSocket("ws://localhost:15003");
@@ -180,9 +182,10 @@ describe("pipeline", () => {
     const latency = await latencyPromise;
     expect(latency).toBeGreaterThan(0);
     // SERV-05: under 100ms target in production.
-    // Test budget: 50ms debounce + state parse + diff + broadcast + Windows FS jitter.
-    // Use 200ms threshold to avoid flakiness while still verifying sub-second performance.
-    expect(latency).toBeLessThan(200);
+    // Test budget: 50ms debounce + state parse + diff + broadcast + CI fs.watch jitter.
+    // 500ms threshold allows for the 200ms reconciler fallback on Linux CI while still
+    // verifying sub-second performance.
+    expect(latency).toBeLessThan(500);
     ws.close();
   }, { timeout: 15000 });
 

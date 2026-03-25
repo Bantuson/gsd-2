@@ -117,13 +117,14 @@ export function createWsServer(options: WsServerOptions): WsServer {
 
         if (launchToken) {
           // GAP-3: Connection starts UNAUTHENTICATED — client must send auth message first.
-          // Set 5-second timeout: close with 4001 if not authenticated in time.
+          // Set 1-second timeout: close with 4001 if not authenticated in time.
+          // 1s is generous for legitimate clients (they send auth immediately).
           const authTimeout = setTimeout(() => {
             const currentData = (ws as unknown as { data?: { authenticated?: boolean } }).data;
             if (!currentData?.authenticated) {
               ws.close(4001, "Authentication timeout");
             }
-          }, 5000);
+          }, 1000);
           (ws as unknown as { data: { authTimeout?: ReturnType<typeof setTimeout> } }).data.authTimeout = authTimeout;
         } else {
           // No launchToken configured (tests/dev) — auto-authenticate immediately

@@ -64,7 +64,9 @@ describe("T-AUTH-01 — Authentication Enforcement", () => {
     }
     const wsPort = regBody.wsPort;
 
-    // Try to connect to WS without any auth token
+    // Try to connect to WS without any auth token.
+    // Server uses first-message auth: connection is upgraded but server closes with 4001
+    // after 1s if no auth message is sent. Test must NOT send any auth message.
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
       let settled = false;
@@ -76,37 +78,34 @@ describe("T-AUTH-01 — Authentication Enforcement", () => {
         else resolve();
       };
 
+      // Server auth timeout is 1s — allow 3s total for server to close the connection
       const timer = setTimeout(() => {
         ws.close();
-        done(new Error("B51: WS connection did not close within 2s — server accepted unauthenticated WS"));
-      }, 2000);
+        done(new Error("B51: server did not close unauthenticated WS within 3s"));
+      }, 3000);
 
       ws.onopen = () => {
-        clearTimeout(timer);
-        // Connection was accepted — this is the RED failure
-        // Call done (reject) BEFORE ws.close() to prevent onclose from racing to resolve first
-        done(new Error("B51 FAIL: WebSocket accepted connection without auth token"));
-        ws.close();
+        // First-message auth: connection is accepted but unauthenticated.
+        // Do NOT send any auth message — wait for server to close with 4001.
       };
 
       ws.onerror = () => {
         clearTimeout(timer);
-        done(); // rejected with error — correct behavior
+        done(); // Transport-level rejection — also acceptable
       };
 
       ws.onclose = (e) => {
         clearTimeout(timer);
-        if (e.wasClean && e.code === 1000) {
-          // Normal close initiated by us in onopen — the connection was accepted, RED failure already recorded
-          done();
-          return;
+        if (e.code === 4001 || e.code === 1008 || e.code === 1002) {
+          done(); // Server correctly rejected unauthenticated connection
+        } else if (e.wasClean && e.code === 1000) {
+          done(new Error("B51 FAIL: server closed cleanly (1000) — expected auth rejection (4001)"));
+        } else {
+          done(); // Any other server-initiated close is acceptable
         }
-        // Server-initiated close: code should be 1008 (policy), 1002 (protocol), or 4001 (auth)
-        // If none of these, the WS was closed unexpectedly — still fails RED
-        done();
       };
     });
-  });
+  }, { timeout: 5000 });
 
   it("B52: Session isolation — two WS clients with different windowIds do not receive each other's planning-state messages", async () => {
     // Create a standalone WS server on a random port (no launchToken so both clients can connect)
