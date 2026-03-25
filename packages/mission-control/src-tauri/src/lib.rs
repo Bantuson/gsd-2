@@ -138,8 +138,10 @@ pub fn run() {
 
 /// Check whether a newer app version is available via the configured updater endpoint.
 /// Returns true if an update is available, false if not.
+/// GAP-7: Only callable from the "main" window.
 #[tauri::command]
-async fn check_for_updates(app: tauri::AppHandle) -> Result<bool, String> {
+async fn check_for_updates(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<bool, String> {
+    commands::require_main_window(&window)?;
     match app.updater().map_err(|e| e.to_string())?.check().await {
         Ok(Some(_update)) => Ok(true),
         Ok(None) => Ok(false),
@@ -148,8 +150,10 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<bool, String> {
 }
 
 /// Download and install the pending update, then restart the app.
+/// GAP-7: Only callable from the "main" window.
 #[tauri::command]
-async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn install_update(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    commands::require_main_window(&window)?;
     let updater = app.updater().map_err(|e| e.to_string())?;
     if let Some(update) = updater.check().await.map_err(|e| e.to_string())? {
         update.download_and_install(|_chunk, _total| {}, || {}).await

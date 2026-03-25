@@ -9,7 +9,7 @@ use url::Url;
 /// B72/B31: Verify the calling window is the main window.
 /// Custom #[tauri::command] functions are not restricted by Tauri capability JSON,
 /// so we enforce access control programmatically via window label check.
-fn require_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+pub fn require_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
     if window.label() != "main" {
         Err(format!(
             "Permission denied: command restricted to main window (caller: {})",
@@ -165,8 +165,13 @@ pub async fn delete_credential(window: tauri::WebviewWindow, key: String) -> boo
 /// Reveal a file or directory in the native file manager (Finder/Explorer).
 /// Falls back to opening the path as a file:// URL if reveal_item_in_dir is unavailable.
 /// Returns true on success.
+/// GAP-5: Only callable from the "main" window.
 #[tauri::command]
-pub async fn reveal_path(app: AppHandle, path: String) -> bool {
+pub async fn reveal_path(window: tauri::WebviewWindow, app: AppHandle, path: String) -> bool {
+    if require_main_window(&window).is_err() {
+        eprintln!("[commands] reveal_path: rejected call from window '{}'", window.label());
+        return false;
+    }
     let p = std::path::Path::new(&path);
     if !p.is_absolute() {
         eprintln!("[commands] reveal_path: rejected non-absolute path: {path}");
@@ -259,11 +264,14 @@ pub async fn retry_dep_check(app: AppHandle) -> bool {
 }
 
 /// Open a new Mission Control window (independent project state).
+/// GAP-6: Only callable from the "main" window.
 #[tauri::command]
 pub async fn open_new_window(
+    window: tauri::WebviewWindow,
     app: AppHandle,
     counter: tauri::State<'_, WindowCounter>,
 ) -> Result<(), String> {
+    require_main_window(&window)?;
     let label = format!("window-{}", counter.next());
     tauri::WebviewWindowBuilder::new(
         &app,
