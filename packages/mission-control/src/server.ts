@@ -1,5 +1,6 @@
-import { resolve, dirname, basename } from "node:path";
+import { resolve, dirname, basename, normalize } from "node:path";
 import { access } from "node:fs/promises";
+import { homedir } from "node:os";
 import homepage from "../public/index.html";
 import { startPipeline } from "./server/pipeline";
 import type { PipelineHandle } from "./server/pipeline";
@@ -334,6 +335,17 @@ const server = Bun.serve({
         }
 
         const projectPath = resolve(body.path);
+
+        // GAP-1: Confine project switching to home directory (defense-in-depth)
+        const normalizedPath = normalize(projectPath);
+        if (!normalizedPath.startsWith(normalize(homedir()))) {
+          return addCorsHeaders(
+            Response.json(
+              { error: "Path must be within home directory" },
+              { status: 400 }
+            )
+          );
+        }
 
         // Validate directory exists
         try {
